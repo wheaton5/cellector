@@ -3,7 +3,7 @@ version: "1.0.0"
 author: Haynes Heaton <whheaton@gmail.com>
 about: genotype outlier detection for scRNAseq
 args:
-    - ref_matrix:
+    - ref:
         long: ref
         short: r
         takes_value: true
