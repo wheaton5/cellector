@@ -1,5 +1,6 @@
 #[macro_use]
 
+extern crate clap;
 extern crate hashbrown;
 extern crate rand;
 extern crate statrs;
@@ -47,7 +48,6 @@ use itertools::izip;
 
 
 
-extern crate clap;
 use clap::App;
 
 
@@ -57,6 +57,10 @@ use clap::App;
 fn main() {
 
     let params = load_params();
+    let (loci_used, total_cells, cell_data, index_to_locus, locus_to_index, list_of_loci_used, locus_cell_counts, ref_alt_counts_per_locus) = load_cell_data(&params);
+
+    
+
 
 
 }
@@ -91,13 +95,14 @@ fn load_params() -> Params{
 }
 
 
-fn load_cell_data(params: &Params) {
-  
+fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, HashMap<usize, usize>, HashSet<usize>, HashMap<usize, usize>, HashMap<usize, [u32; 2]>) {
+    eprintln!("Loading cell data");
+
     let alt_reader = File::open(params.alt_mtx.to_string()).expect("cannot open alt mtx file");
+
     let alt_reader = BufReader::new(alt_reader);
     let ref_reader = File::open(params.ref_mtx.to_string()).expect("cannot open ref mtx file");
-    let ref_reader = BufReader::new(ref_reader);
-
+    
     let ref_reader = BufReader::new(ref_reader);
     let mut used_loci: HashSet<usize> = HashSet::new();
     let mut line_number = 0;
@@ -107,44 +112,88 @@ fn load_cell_data(params: &Params) {
     let mut locus_cell_counts: HashMap<usize, [u32; 2]> = HashMap::new();
     let mut locus_umi_counts: HashMap<usize, [u32; 2]> = HashMap::new();
     let mut locus_counts: HashMap<usize, HashMap<usize, [u32; 2]>> = HashMap::new();
+    let mut cell_count_per_locus: HashMap<usize, usize> = HashMap::new(); // New hashmap Reza
     for (alt_line, ref_line) in izip!(alt_reader.lines(), ref_reader.lines()) {
-
         let alt_line = alt_line.expect("cannot read alt mtx");
         let ref_line = ref_line.expect("cannot read ref mtx");
-
-        for (alt_line, ref_line) in izip!(alt_reader.lines(), ref_reader.lines()) {
-            let alt_line = alt_line.expect("cannot read alt mtx");
-            let ref_line = ref_line.expect("cannot read ref mtx");
-            if line_number > 2 {
-                let alt_tokens: Vec<&str> = alt_line.split_whitespace().collect();
-                let ref_tokens: Vec<&str> = ref_line.split_whitespace().collect();
-                let locus = alt_tokens[0].to_string().parse::<usize>().unwrap() - 1;
-                all_loci.insert(locus);
-                let cell = alt_tokens[1].to_string().parse::<usize>().unwrap() - 1;
-                let ref_count = ref_tokens[2].to_string().parse::<u32>().unwrap();
-                let alt_count = alt_tokens[2].to_string().parse::<u32>().unwrap();
-                assert!(locus < total_loci);
-                assert!(cell < total_cells);
-                let cell_counts = locus_cell_counts.entry(locus).or_insert([0; 2]);
-                let umi_counts = locus_umi_counts.entry(locus).or_insert([0; 2]);
-                if ref_count > 0 { cell_counts[0] += 1; umi_counts[0] += ref_count; }
-                if alt_count > 0 { cell_counts[1] += 1; umi_counts[1] += alt_count; }
-                let cell_counts = locus_counts.entry(locus).or_insert(HashMap::new());
-                cell_counts.insert(cell, [ref_count, alt_count]);
-
-            } else if line_number == 2 {
-                let tokens: Vec<&str> = alt_line.split_whitespace().collect();
-                total_loci = tokens[0].to_string().parse::<usize>().unwrap();
-                total_cells = tokens[1].to_string().parse::<usize>().unwrap();
-            }
-            line_number += 1;
+        if line_number > 2 {
+            let alt_tokens: Vec<&str> = alt_line.split_whitespace().collect();
+            let ref_tokens: Vec<&str> = ref_line.split_whitespace().collect();
+            let locus = alt_tokens[0].to_string().parse::<usize>().unwrap() - 1;
+            all_loci.insert(locus);
+            let cell = alt_tokens[1].to_string().parse::<usize>().unwrap() - 1;
+            let ref_count = ref_tokens[2].to_string().parse::<u32>().unwrap();
+            let alt_count = alt_tokens[2].to_string().parse::<u32>().unwrap();
+            assert!(locus < total_loci);
+            assert!(cell < total_cells);
+            let cell_counts = locus_cell_counts.entry(locus).or_insert([0; 2]);
+            let umi_counts = locus_umi_counts.entry(locus).or_insert([0; 2]);
+            if ref_count > 0 { cell_counts[0] += 1; umi_counts[0] += ref_count; }
+            if alt_count > 0 { cell_counts[1] += 1; umi_counts[1] += alt_count; }
+            let cell_counts = locus_counts.entry(locus).or_insert(HashMap::new());
+            cell_counts.insert(cell, [ref_count, alt_count]);
+            *cell_count_per_locus.entry(locus).or_insert(0) += 1; // New hashmap Reza
+        } else if line_number == 2 {
+            let tokens: Vec<&str> = alt_line.split_whitespace().collect();
+            total_loci = tokens[0].to_string().parse::<usize>().unwrap();
+            total_cells = tokens[1].to_string().parse::<usize>().unwrap();
         }
-            
+        line_number += 1;
         
     }
+    
+    //REZA #ref & #alt  per loci
+    let mut ref_alt_counts_per_locus: HashMap<usize, [u32; 2]> = HashMap::new();
+    for (&locus, cell_counts) in &locus_counts {
+        let mut total_ref = 0;
+        let mut total_alt = 0;
+        for &counts in cell_counts.values() {
+            total_ref += counts[0];
+            total_alt += counts[1];
+        }
+        ref_alt_counts_per_locus.insert(locus, [total_ref, total_alt]);
+    }
 
-   
 
+    let mut all_loci2: Vec<usize> = Vec::new();
+    for loci in all_loci {
+        all_loci2.push(loci);
+    }
+    let mut all_loci = all_loci2;
+
+    all_loci.sort();
+    let mut index_to_locus: Vec<usize> = Vec::new();
+    let mut locus_to_index: HashMap<usize, usize> = HashMap::new();
+    let mut cell_data: Vec<CellData> = Vec::new();
+    
+    let mut locus_index = 0;
+    for locus in all_loci {
+
+        let cell_counts = locus_cell_counts.get(&locus).unwrap();
+        let umi_counts = locus_umi_counts.get(&locus).unwrap();
+        // if cell_counts[0] >= params.min_ref && cell_counts[1] >= params.min_alt && umi_counts[0] >= params.min_ref_umis && umi_counts[1] >= params.min_alt_umis {
+        if cell_counts[0] >= params.min_ref && cell_counts[1] >= params.min_alt && umi_counts[0] >= 0 && umi_counts[1] >= 0 {
+            used_loci.insert(locus);
+            index_to_locus.push(locus);
+            locus_to_index.insert(locus, locus_index);
+            for (cell, counts) in locus_counts.get(&locus).unwrap() {
+                if counts[0]+counts[1] == 0 { continue; }
+                cell_data[*cell].alt_counts.push(counts[1]);
+                cell_data[*cell].ref_counts.push(counts[0]);
+                cell_data[*cell].loci.push(locus_index);
+                cell_data[*cell].allele_fractions.push((counts[1] as f32)/((counts[0] + counts[1]) as f32));
+                cell_data[*cell].log_binomial_coefficient.push(
+                     statrs::function::factorial::ln_binomial((counts[1]+counts[0]) as u64, counts[1] as u64) as f32);
+                cell_data[*cell].total_alleles += (counts[0] + counts[1]) as f32;
+            
+            }
+            locus_index += 1;
+        }
+    }
+    eprintln!("total loci used {}",used_loci.len());
+
+
+    (used_loci.len(), total_cells, cell_data, index_to_locus, locus_to_index, used_loci, cell_count_per_locus, ref_alt_counts_per_locus)
     
 }
 
