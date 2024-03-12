@@ -1,5 +1,4 @@
 #[macro_use]
-
 extern crate clap;
 extern crate hashbrown;
 extern crate rand;
@@ -10,8 +9,6 @@ extern crate vcf;
 extern crate flate2;
 
 
-
-//Reza
 extern crate csv;
 use csv::Writer;
 use std::error::Error;
@@ -33,7 +30,7 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-
+use clap::App;
 use std::f32;
 
 use std::ffi::OsStr;
@@ -48,17 +45,12 @@ use itertools::izip;
 
 
 
-use clap::App;
-
-
-
-
 
 fn main() {
 
     let params = load_params();
     let (loci_used, total_cells, cell_data, index_to_locus, locus_to_index, list_of_loci_used, locus_cell_counts, ref_alt_counts_per_locus) = load_cell_data(&params);
-
+    let cell_barcodes = load_barcodes(&params);
     
 
 
@@ -132,7 +124,7 @@ fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, 
             if alt_count > 0 { cell_counts[1] += 1; umi_counts[1] += alt_count; }
             let cell_counts = locus_counts.entry(locus).or_insert(HashMap::new());
             cell_counts.insert(cell, [ref_count, alt_count]);
-            *cell_count_per_locus.entry(locus).or_insert(0) += 1; // New hashmap Reza
+            *cell_count_per_locus.entry(locus).or_insert(0) += 1; 
         } else if line_number == 2 {
             let tokens: Vec<&str> = alt_line.split_whitespace().collect();
             total_loci = tokens[0].to_string().parse::<usize>().unwrap();
@@ -142,7 +134,7 @@ fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, 
         
     }
     
-    //REZA #ref & #alt  per loci
+    //#ref & #alt  per loci
     let mut ref_alt_counts_per_locus: HashMap<usize, [u32; 2]> = HashMap::new();
     for (&locus, cell_counts) in &locus_counts {
         let mut total_ref = 0;
@@ -198,9 +190,59 @@ fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, 
 }
 
 
+fn load_barcodes(params: &Params) -> Vec<String> {
+
+    let reader = reader(&params.barcodes);
+    let mut cell_barcodes: Vec<String> = Vec::new();
+    for line in reader.lines() {
+        let line = line.expect("Unable to read line");
+        cell_barcodes.push(line.to_string());
+    }
+    cell_barcodes
+}
 
 
 
+fn load_ground_truth(params: &Params) -> io::Result<(HashMap<String, String>, Vec<Vec<String>>)> {
+    let reader = reader(&params.ground_truth);
+    let mut ground_truth_map: HashMap<String, String> = HashMap::new();
+    let mut ground_truth_vec: Vec<Vec<String>> = Vec::new();
+
+    for line_result in reader.lines() {
+        let line = line_result.expect("Unable to read a line in the ground truth file");
+        let columns: Vec<&str> = line.split('\t').collect(); // Use tab as the separator
+
+        if columns.len() == 2 {
+            let barcode = columns[0].to_string();
+            let assignment = columns[1].to_string();
+
+            ground_truth_map.insert(barcode.clone(), assignment.clone());
+
+            ground_truth_vec.push(vec![barcode, assignment]);
+        } else {
+
+            eprintln!("Invalid line format: {}", line);
+            //add the correct forpat
+            eprintln!("The correct format is: barcode\tassignment");
+        }
+    }
+
+    Ok((ground_truth_map, ground_truth_vec))
+}
+
+
+pub fn reader(filename: &str) -> Box<dyn BufRead> {
+    let path = Path::new(filename);
+    let file = match File::open(&path) {
+        Err(why) => panic!("couldn't open file {}", filename),
+        Ok(file) => file,
+    };
+    if path.extension() == Some(OsStr::new("gz")) {
+        Box::new(BufReader::with_capacity(128 * 1024, MultiGzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::with_capacity(128 * 1024, file))
+    }
+}
 
 
 
