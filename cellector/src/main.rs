@@ -49,9 +49,9 @@ use itertools::izip;
 fn main() {
 
     let params = load_params();
-    let (loci_used, total_cells, cell_data, index_to_locus, locus_to_index, list_of_loci_used, locus_cell_counts, ref_alt_counts_per_locus) = load_cell_data(&params);
+    let (loci_used, total_cells, cell_data, index_to_locus, locus_to_index) = load_cell_data(&params);
     let cell_barcodes = load_barcodes(&params);
-    
+    // let (ground_truth_map, ground_truth_vec) = load_ground_truth(&params).unwrap();
 
 
 
@@ -61,17 +61,31 @@ fn main() {
 
 
 
+
+fn cellector (cell_data: &Vec<CellData>, cell_barcodes: &Vec<String>, locus_to_index: &HashMap<usize, usize>, index_to_locus: &Vec<usize>, locus_cell_counts: &HashMap<usize, usize>, ref_alt_counts_per_locus: &HashMap<usize, [u32; 2]>, ground_truth_map: &HashMap<String, String>, ground_truth_vec: &Vec<Vec<String>>){
+
+    eprintln!("Starting cellector");
+
+
+    
+
+}
+
+
+
+
 fn load_params() -> Params{
 
     let yaml = load_yaml!("params.yml");
     let params = App::from_yaml(yaml).get_matches();
-
-    let ref_mtx = params.value_of("ref_mtx").unwrap().to_string();
-    let alt_mtx = params.value_of("alt_mtx").unwrap().to_string();
+    let ref_mtx = params.value_of("ref").unwrap().to_string();
+    let alt_mtx = params.value_of("alt").unwrap().to_string();
     let barcodes = params.value_of("barcodes").unwrap().to_string();
-    let min_alt = params.value_of("min_alt").unwrap_or("4").parse::<u32>().unwrap();
-    let min_ref = params.value_of("min_ref").unwrap_or("4").parse::<u32>().unwrap();
-    let ground_truth = params.value_of("ground_truth").unwrap().to_string();
+    let min_alt = params.value_of("min_alt").unwrap_or("4");
+    let min_alt = min_alt.to_string().parse::<u32>().unwrap();
+    let min_ref = params.value_of("min_ref").unwrap_or("4");
+    let min_ref = min_ref.to_string().parse::<u32>().unwrap();
+    // let ground_truth = params.value_of("ground_truth").unwrap().to_string();
 
 
     Params {
@@ -81,15 +95,13 @@ fn load_params() -> Params{
         barcodes: barcodes,
         min_alt: min_alt,
         min_ref: min_ref,
-        ground_truth: ground_truth,
+        ground_truth: "ground_truth.tsv".to_string(), // Hardcoded for now
 
     }
 }
 
 
-fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, HashMap<usize, usize>, HashSet<usize>, HashMap<usize, usize>, HashMap<usize, [u32; 2]>) {
-    eprintln!("Loading cell data");
-
+fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, HashMap<usize, usize>) {
     let alt_reader = File::open(params.alt_mtx.to_string()).expect("cannot open alt mtx file");
 
     let alt_reader = BufReader::new(alt_reader);
@@ -104,7 +116,6 @@ fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, 
     let mut locus_cell_counts: HashMap<usize, [u32; 2]> = HashMap::new();
     let mut locus_umi_counts: HashMap<usize, [u32; 2]> = HashMap::new();
     let mut locus_counts: HashMap<usize, HashMap<usize, [u32; 2]>> = HashMap::new();
-    let mut cell_count_per_locus: HashMap<usize, usize> = HashMap::new(); // New hashmap Reza
     for (alt_line, ref_line) in izip!(alt_reader.lines(), ref_reader.lines()) {
         let alt_line = alt_line.expect("cannot read alt mtx");
         let ref_line = ref_line.expect("cannot read ref mtx");
@@ -124,29 +135,13 @@ fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, 
             if alt_count > 0 { cell_counts[1] += 1; umi_counts[1] += alt_count; }
             let cell_counts = locus_counts.entry(locus).or_insert(HashMap::new());
             cell_counts.insert(cell, [ref_count, alt_count]);
-            *cell_count_per_locus.entry(locus).or_insert(0) += 1; 
         } else if line_number == 2 {
             let tokens: Vec<&str> = alt_line.split_whitespace().collect();
             total_loci = tokens[0].to_string().parse::<usize>().unwrap();
             total_cells = tokens[1].to_string().parse::<usize>().unwrap();
         }
         line_number += 1;
-        
     }
-    
-    //#ref & #alt  per loci
-    let mut ref_alt_counts_per_locus: HashMap<usize, [u32; 2]> = HashMap::new();
-    for (&locus, cell_counts) in &locus_counts {
-        let mut total_ref = 0;
-        let mut total_alt = 0;
-        for &counts in cell_counts.values() {
-            total_ref += counts[0];
-            total_alt += counts[1];
-        }
-        ref_alt_counts_per_locus.insert(locus, [total_ref, total_alt]);
-    }
-
-
     let mut all_loci2: Vec<usize> = Vec::new();
     for loci in all_loci {
         all_loci2.push(loci);
@@ -157,13 +152,13 @@ fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, 
     let mut index_to_locus: Vec<usize> = Vec::new();
     let mut locus_to_index: HashMap<usize, usize> = HashMap::new();
     let mut cell_data: Vec<CellData> = Vec::new();
-    
+    for _cell in 0..total_cells {
+        cell_data.push(CellData::new());
+    }
     let mut locus_index = 0;
     for locus in all_loci {
-
         let cell_counts = locus_cell_counts.get(&locus).unwrap();
         let umi_counts = locus_umi_counts.get(&locus).unwrap();
-        // if cell_counts[0] >= params.min_ref && cell_counts[1] >= params.min_alt && umi_counts[0] >= params.min_ref_umis && umi_counts[1] >= params.min_alt_umis {
         if cell_counts[0] >= params.min_ref && cell_counts[1] >= params.min_alt && umi_counts[0] >= 0 && umi_counts[1] >= 0 {
             used_loci.insert(locus);
             index_to_locus.push(locus);
@@ -177,17 +172,49 @@ fn load_cell_data(params: &Params) -> (usize, usize, Vec<CellData>, Vec<usize>, 
                 cell_data[*cell].log_binomial_coefficient.push(
                      statrs::function::factorial::ln_binomial((counts[1]+counts[0]) as u64, counts[1] as u64) as f32);
                 cell_data[*cell].total_alleles += (counts[0] + counts[1]) as f32;
-            
+                //println!("cell {} locus {} alt {} ref {} fraction {}",*cell, locus_index, counts[1], counts[0], 
+                //    (counts[1] as f32)/((counts[0] + counts[1]) as f32));
             }
             locus_index += 1;
         }
     }
     eprintln!("total loci used {}",used_loci.len());
-
-
-    (used_loci.len(), total_cells, cell_data, index_to_locus, locus_to_index, used_loci, cell_count_per_locus, ref_alt_counts_per_locus)
     
+    (used_loci.len(), total_cells, cell_data, index_to_locus, locus_to_index)
 }
+
+
+
+
+         
+
+
+
+
+struct CellData {
+    allele_fractions: Vec<f32>,
+    log_binomial_coefficient: Vec<f32>,
+    alt_counts: Vec<u32>,
+    ref_counts: Vec<u32>, // 
+    loci: Vec<usize>,// ID
+    total_alleles: f32,
+}
+
+impl CellData {
+    fn new() -> CellData {
+        CellData{
+            allele_fractions: Vec::new(),
+            log_binomial_coefficient: Vec::new(),
+            alt_counts: Vec::new(),
+            ref_counts: Vec::new(),
+            loci: Vec::new(),
+            total_alleles: 0.0,
+        }
+    }
+}
+
+
+
 
 
 fn load_barcodes(params: &Params) -> Vec<String> {
@@ -256,11 +283,7 @@ struct Params {
     ground_truth: String,
 }
 
-struct CellData {
-    allele_fractions: Vec<f32>,
-    log_binomial_coefficient: Vec<f32>,
-    alt_counts: Vec<u32>,
-    ref_counts: Vec<u32>, 
-    loci: Vec<usize>,
-    total_alleles: f32,
-}
+
+
+
+
