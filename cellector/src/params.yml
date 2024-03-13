@@ -32,7 +32,7 @@ args:
         required: false
         help: minimum number of cells containing the ref allele for the variant to be used for clustering 
     - ground_truth:
-        long: ground truth
+        long: ground_truth
         short: g
         required: false
         takes_value: true
