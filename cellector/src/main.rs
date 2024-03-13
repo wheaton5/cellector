@@ -52,22 +52,32 @@ use rand::distributions::Distribution;
 fn main() {
 
     let params = load_params();
-    let (locus_to_cell_data ,loci_used, total_cells, cell_data, index_to_locus, locus_to_index, locus_to_cell_ids) = load_cell_data(&params);
+
     let cell_barcodes = load_barcodes(&params);
-    let (ground_truth_barcode_to_assignment, ground_truth_vec) = load_ground_truth(&params).unwrap();
+
+    let (locus_to_cell_data ,loci_used, total_cells, cell_data, index_to_locus, locus_to_index, locus_to_cell_ids) = load_cell_data(&params,cell_barcodes.clone());
+    
+    let (ground_truth_barcode_to_assignment, ground_truth_barcode_and_assignments) = load_ground_truth(&params).unwrap();
 
     println!("loci used: {}", loci_used.len());
     println!("total cells: {}", total_cells);
     println!("cell barcodes: {}", cell_barcodes.len());
     println!("ground truth: {}", ground_truth_barcode_to_assignment.len());
 
-    cellector(cell_data, loci_used, &locus_to_cell_ids, locus_to_cell_data);
+    cellector(cell_data, loci_used, &locus_to_cell_ids, locus_to_cell_data, ground_truth_barcode_and_assignments, ground_truth_barcode_to_assignment, cell_barcodes, index_to_locus, locus_to_index);
 
 }
 
 
 
-fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_ids: &HashMap<usize, Vec<usize>>, locus_to_cell_data: HashMap<usize, HashMap<usize, [u32; 2]>>){
+fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_ids: &HashMap<usize, Vec<usize>>, 
+    locus_to_cell_data: HashMap<usize,
+    HashMap<usize, [u32; 2]>>,
+    ground_truth_vec: Vec<Vec<String>>, ground_truth_barcode_to_assignment: HashMap<String, String>,
+    cell_barcodes: Vec<String>,
+    index_to_locus: Vec<usize>,
+    locus_to_index : HashMap<usize, usize>,
+    ){
 
     // make sure the data is loaded correctly
 
@@ -75,73 +85,144 @@ fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_
 
     let mut alphas_betas_pairs = init_alphas_betas_pairs(&cell_data, &loci_used, &locus_to_cell_data);
 
-    let mut log_likelihoods: Vec<f64> = vec![0.0; cell_data.len()]; 
+    let mut normalized_log_likelihoods: Vec<f64> = vec![0.0; cell_data.len()];
 
 
+
+
+
+
+    let mut cell_index_to_outputs: HashMap<usize, output> = HashMap::new();
+
+   
+    let mut barcode_index = 0;
     for (i, cell) in cell_data.iter().enumerate() {
 
-        let likelihood = log_beta_binomial_PMF(alphas_betas_pairs[1][0], alphas_betas_pairs[2][0], cell.alt_counts[0] as usize, cell.alt_counts[0] as usize + cell.ref_counts[0] as usize);
-        let normilized_liklihood = likelihood / ( cell.loci.len() as f64);  // normalize by the number of loci
-        log_likelihoods[i] = normilized_liklihood;
+        let mut barcode = cell_barcodes[barcode_index].clone();
+        let ground_truth = ground_truth_barcode_to_assignment.get(&barcode).unwrap().clone();
+        let mut normalized_likelihood = 0.0;
+        let mut cell_likelihood = 0.0;
+        let assignment = String::from("unassigned");
+
+        
+
+        for (i, locus_index) in cell.loci.iter().enumerate() {
+
+           
+            let log_likelihood = log_beta_binomial_PMF(locus_index, alphas_betas_pairs.clone(), cell, i, index_to_locus.clone());
+
+
+            if i == 0 {
+                cell_likelihood = log_likelihood;
+            }
+            else {
+            cell_likelihood = log_sum_exp(cell_likelihood, log_likelihood);
+            }
+
+            
+
+        }
+
+        normalized_likelihood = cell_likelihood / cell.total_alleles as f64;
+
+        
+        // cell_index_to_outputs.insert(i, output::new(barcode.clone(), ground_truth.clone(), normalized_likelihood, assignment, cell.clone()));
+        // println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
+        barcode_index += 1;
+        println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
+
     }
 
-
-
-
-
-    let mean_likelihood = log_likelihoods.iter().sum::<f64>() / log_likelihoods.len() as f64;
-    let sigma = log_likelihoods.iter().map(|x| (x - mean_likelihood).powi(2)).sum::<f64>() / log_likelihoods.len() as f64;
-    let sigma = sigma.sqrt();
 
 
 
 
 }
 
+fn log_sum_exp(likelihood_1: f64, likelihood_2: f64) -> f64 {
+    let max = likelihood_1.max(likelihood_2);
+    let sum = (likelihood_1 - max).exp() + (likelihood_2 - max).exp();
+    sum.ln() + max
+}
 
 
+fn log_beta_binomial_PMF(locus_index: &usize, alphas_betas_pairs: HashMap<usize, Vec<usize>>, cell: &CellData, i: usize, index_to_locus: Vec<usize>
+) -> f64 {
 
-fn log_beta_binomial_PMF(alpha: usize, beta: usize, k: usize, n: usize) -> f64 {
+    let mut log_likelihood = 0.0 as f64;
 
-    let mut log_likelihood = 0.0;
+    let locus = index_to_locus[*locus_index];
+    let alpha = alphas_betas_pairs.get(&locus).unwrap()[0];
+    let beta = alphas_betas_pairs.get(&locus).unwrap()[1];
 
-    for i in 0..k {
+    let log_binomial_coefficient = cell.log_binomial_coefficient[i];
+    let ref_count = cell.ref_counts[i];
+    let alt_count = cell.alt_counts[i];
+    
+    let num_params = alt_count as usize + alpha ;
+    let denom_params = ref_count as usize + beta ;
 
-        log_likelihood += statrs::function::factorial::ln_binomial(n as u64, i as u64) as f64;
-        log_likelihood += statrs::function::factorial::ln_binomial(alpha as u64, i as u64) as f64;
-        log_likelihood += statrs::function::factorial::ln_binomial(beta as u64, (n-i) as u64) as f64;
 
-    }
+    let log_prob_num = log_beta_calc(num_params, denom_params);
+    let log_prob_denom = log_beta_calc(alpha, beta);
+
+    log_likelihood = ((log_binomial_coefficient as f64 + log_prob_num) - log_prob_denom);
+
 
     log_likelihood
-
 }
 
 
 
-fn init_alphas_betas_pairs(cell_data: &Vec<CellData>, loci_used: &HashSet<usize>, locus_to_cell_data: &HashMap<usize, HashMap<usize, [u32; 2]>>) -> Vec<Vec<usize>>{
+fn log_beta_calc(alpha: usize, beta: usize) -> f64 {
 
-    let mut alphas_betas_pairs : Vec<Vec<usize>> = vec![vec![0; loci_used.len()]; 3];
+    let log_gamma_alpha = statrs::function::gamma::ln_gamma(alpha as f64);
+    let log_gamma_beta = statrs::function::gamma::ln_gamma(beta as f64);
+    let log_gamma_alpha_beta = statrs::function::gamma::ln_gamma((alpha + beta) as f64);
 
-    for (i, locus) in loci_used.iter().enumerate() {
+    log_gamma_alpha + log_gamma_beta - log_gamma_alpha_beta
+}
 
-        alphas_betas_pairs[0][i] = locus.clone();
+
+
+
+
+fn init_alphas_betas_pairs(cell_data: &Vec<CellData>, loci_used: &HashSet<usize>, locus_to_cell_data: &HashMap<usize, HashMap<usize, [u32; 2]>>) -> HashMap<usize, Vec<usize>> {
+
+    // let mut alphas_betas_pairs : Vec<Vec<usize>> = vec![vec![0; loci_used.len()]; 3];
+    let mut alphas_betas_pairs : HashMap<usize, Vec<usize>> = HashMap::new();
+
+    for locus in loci_used.iter() {
+        
 
         let mut alpha = 1;
         let mut beta = 1;
 
         for (cell, counts) in locus_to_cell_data.get(locus).unwrap() {
-
             alpha += counts[1];
             beta += counts[0];
-            
-
         }
 
-        alphas_betas_pairs[1][i] = alpha as usize;
-        alphas_betas_pairs[2][i] = beta as usize;
-        
+        alphas_betas_pairs.insert(*locus, vec![alpha as usize, beta as usize]);
+
     }
+
+    // for (i, locus) in loci_used.iter().enumerate() {
+
+    //     alphas_betas_pairs[0][i] = locus.clone();
+
+    //     let mut alpha = 1;
+    //     let mut beta = 1;
+
+    //     for (cell, counts) in locus_to_cell_data.get(locus).unwrap() {
+    //         alpha += counts[1];
+    //         beta += counts[0];
+    //     }
+
+    //     alphas_betas_pairs[1][i] = alpha as usize;
+    //     alphas_betas_pairs[2][i] = beta as usize;
+        
+    // }
 
     alphas_betas_pairs
 }
@@ -175,7 +256,7 @@ fn load_params() -> Params{
 }
 
 
-fn load_cell_data(params: &Params) -> (HashMap<usize, HashMap<usize, [u32; 2]>>, HashSet<usize>, usize, Vec<CellData>, Vec<usize>, HashMap<usize, usize>, HashMap<usize, Vec<usize>>) {
+fn load_cell_data(params: &Params, barcodes: Vec<String>) -> (HashMap<usize, HashMap<usize, [u32; 2]>>, HashSet<usize>, usize, Vec<CellData>, Vec<usize>, HashMap<usize, usize>, HashMap<usize, Vec<usize>>) {
     let alt_reader = File::open(params.alt_mtx.to_string()).expect("cannot open alt mtx file");
 
     let alt_reader = BufReader::new(alt_reader);
@@ -243,6 +324,7 @@ fn load_cell_data(params: &Params) -> (HashMap<usize, HashMap<usize, [u32; 2]>>,
     }
 
     let mut locus_index = 0;
+    let mut barcode_index = 0;
     for locus in all_loci {
         let cell_counts = locus_cell_counts.get(&locus).unwrap();
         let umi_counts = locus_umi_counts.get(&locus).unwrap();
@@ -254,6 +336,9 @@ fn load_cell_data(params: &Params) -> (HashMap<usize, HashMap<usize, [u32; 2]>>,
                 
                 if counts[0]+counts[1] == 0 { continue; }
                 
+                cell_data[*cell].barcode = barcodes[barcode_index].clone();
+                cell_data[*cell].cell_id = *cell;
+                // barcode_index += 1;
                 cell_data[*cell].alt_counts.push(counts[1]);
                 cell_data[*cell].ref_counts.push(counts[0]);
                 cell_data[*cell].loci.push(locus_index);
@@ -262,7 +347,7 @@ fn load_cell_data(params: &Params) -> (HashMap<usize, HashMap<usize, [u32; 2]>>,
                      statrs::function::factorial::ln_binomial((counts[1]+counts[0]) as u64, counts[1] as u64) as f32);
                 cell_data[*cell].total_alleles += (counts[0] + counts[1]) as f32;
 
-                // cell is cell index in the celldata, what I want is to be able to acces this by cell_id
+
                 
 
             }
@@ -281,9 +366,10 @@ fn load_cell_data(params: &Params) -> (HashMap<usize, HashMap<usize, [u32; 2]>>,
 
 
 
-
+#[derive(Clone)]
 struct CellData {
     cell_id: usize,
+    barcode: String,
     allele_fractions: Vec<f32>,
     log_binomial_coefficient: Vec<f32>,
     alt_counts: Vec<u32>,
@@ -296,6 +382,7 @@ impl CellData {
     fn new(ID: usize) -> CellData {
         CellData{
             cell_id: 0,
+            barcode: String::new(),
             allele_fractions: Vec::new(),
             log_binomial_coefficient: Vec::new(),
             alt_counts: Vec::new(),
@@ -379,6 +466,25 @@ struct Params {
 }
 
 
+struct output{
+    barcode: String,
+    ground_truth: String,
+    likelihood: f64,
+    assignment: String,
+    CellData: CellData,
+}
+
+impl output {
+    fn new(barcode: String, ground_truth: String, likelihood: f64, assignment: String, CellData: CellData) -> output {
+        output{
+            barcode: barcode,
+            ground_truth: ground_truth,
+            likelihood: likelihood,
+            assignment: assignment,
+            CellData: CellData,
+        }
+    }
+}
 
 
 
