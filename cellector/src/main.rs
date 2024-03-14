@@ -64,7 +64,8 @@ fn main() {
     println!("cell barcodes: {}", cell_barcodes.len());
     println!("ground truth: {}", ground_truth_barcode_to_assignment.len());
 
-    cellector(cell_data, loci_used, &locus_to_cell_ids, locus_to_cell_data, ground_truth_barcode_and_assignments, ground_truth_barcode_to_assignment, cell_barcodes, index_to_locus, locus_to_index);
+    cellector(cell_data, loci_used, &locus_to_cell_ids, locus_to_cell_data, 
+        ground_truth_barcode_and_assignments, ground_truth_barcode_to_assignment, cell_barcodes, index_to_locus, locus_to_index);
 
 }
 
@@ -84,14 +85,8 @@ fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_
     eprintln!("cellector...");
 
     let mut alphas_betas_pairs = init_alphas_betas_pairs(&cell_data, &loci_used, &locus_to_cell_data);
-
     let mut normalized_log_likelihoods: Vec<f64> = vec![0.0; cell_data.len()];
-
-
     let mut cell_index_to_outputs: HashMap<usize, output> = HashMap::new();
-
-
-
     let mut barcode_index = 0;
 
 
@@ -101,64 +96,130 @@ fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_
         let ground_truth = ground_truth_barcode_to_assignment.get(&barcode).unwrap().clone();
         
         let mut normalized_likelihood = 0.0;
-        let mut cell_likelihood = 0.0;
+        let mut cell_log_likelihood = 0.0;
         let assignment = String::from("unassigned");
 
         
 
-        for (i, locus_index) in cell.loci.iter().enumerate() {
+        for (j, locus_index) in cell.loci.iter().enumerate() {
+
+            // let locus = index_to_locus[*locus_index];
+            // if !loci_used.contains(&locus) {
+            //     continue;
+            // }
 
            
-            let log_likelihood = log_beta_binomial_PMF(locus_index, alphas_betas_pairs.clone(), cell, i, index_to_locus.clone());
+            let log_likelihood = log_beta_binomial_PMF(locus_index, alphas_betas_pairs.clone(), cell, j, index_to_locus.clone());
 
-
-            if i == 0 {
-                cell_likelihood = log_likelihood;
-            }
-            else {
-            cell_likelihood = log_sum_exp(cell_likelihood, log_likelihood);
-            }
+            assert!(log_likelihood <= 0.0);
+            
+            cell_log_likelihood += log_likelihood;
+           
 
             
 
         }
 
-        normalized_likelihood = cell_likelihood / cell.total_alleles as f64;
+        normalized_likelihood = cell_log_likelihood / cell.alt_counts.len() as f64;
         normalized_log_likelihoods[i] = normalized_likelihood;
 
         
         cell_index_to_outputs.insert(i, output::new(barcode.clone(), ground_truth.clone(), normalized_likelihood, assignment, cell.clone()));
-        // println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
+        println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
         barcode_index += 1;
-        // println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
-        let cell_hashing = ground_truth_barcode_to_assignment.get(&barcode).unwrap().clone();
-        println!("({}){}\t{}\t{}", i, barcode, cell_hashing, normalized_likelihood);
+      
 
 
+    }
+
+
+    let mut writer = Writer::from_path("output.csv").unwrap();
+    writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
+
+    for (i, output) in cell_index_to_outputs.iter() {
+
+        let loci = output.CellData.ref_counts.len().to_string();
+        writer.write_record(&[&output.barcode, &output.ground_truth, &output.likelihood.to_string(), &loci]).unwrap();
     }
 
     println!("first iteration done\n");
     println!("removing sigma 4 outliers\n");
 
     let mean: f64 = normalized_log_likelihoods.iter().sum::<f64>() / normalized_log_likelihoods.len() as f64;
-    let variance: f64 = normalized_log_likelihoods.iter()
-        .map(|&value| {
-            let diff = value - mean;
-            diff * diff
-        })
-        .sum::<f64>() / (normalized_log_likelihoods.len() - 1) as f64;
+    let variance: f64 = calculate_variance(&normalized_log_likelihoods, mean);
     let std_dev = variance.sqrt();
 
-     for i in 0..normalized_log_likelihoods.len() {
-        if normalized_log_likelihoods[i] > mean + 4.0 * std_dev {
-            println!("removing outlier: {}", i);
+    
+    let mut num_removed = 0;
+    let mut removed_outliers: Vec<usize> = Vec::new();
+    let mut removing_step = 0;
+
+    loop{
+
+        if removing_step == 0{
+            for i in 0..normalized_log_likelihoods.len() {
+                if normalized_log_likelihoods[i] > mean + 4.0 * std_dev {
+                    removed_outliers.push(i);
+                    num_removed += 1;
+                }
+            }
+            removing_step = 1;
         }
-     }
+        else{
+            // // recalculate the mean without removed cells
+            // let mut new_mean = 0.0;
+            // let mut new_variance = 0.0;
+            // let mut new_std_dev = 0.0;
+            // let mut new_normalized_log_likelihoods: Vec<f64> = Vec::new();
+            // for i in 0..normalized_log_likelihoods.len() {
+            //     if !removed_outliers.contains(&i) {
+            //         new_normalized_log_likelihoods.push(normalized_log_likelihoods[i]);
+            //     }
+            // }
+            // new_mean = new_normalized_log_likelihoods.iter().sum::<f64>() / new_normalized_log_likelihoods.len() as f64;
+            // new_variance = calculate_variance(&new_normalized_log_likelihoods, new_mean);
+            // new_std_dev = new_variance.sqrt();
+
+            // //remove new 4-sigma outliers
+            // for i in 0..new_normalized_log_likelihoods.len() {
+            //     if new_normalized_log_likelihoods[i] > new_mean + 4.0 * new_std_dev {
+            //         removed_outliers.push(i);
+            //         num_removed += 1;
+            //     }
+            // }
+        }
+    
+        if num_removed == 0 {
+            break; 
+        }
+        println!("{} outliers removed", num_removed);
+        num_removed = 0;
+    }
+
+    for i in removed_outliers.iter() {
+        let mut output = cell_index_to_outputs.get_mut(i).unwrap();
+        println!("{}\t{}\t{}", output.barcode, output.likelihood,output.ground_truth);
+    }
+    
+
+
+}
 
 
 
+fn calculate_variance(values: &[f64], mean: f64) -> f64 {
+    if values.len() <= 1 {
+        return 0.0; 
+    }
 
+    let mut sum_of_squared_diffs = 0.0;
+    for &value in values {
+        let diff = value - mean;
+        sum_of_squared_diffs += diff * diff;
+    }
 
+    let variance = sum_of_squared_diffs / (values.len() - 1) as f64;
+    variance
 }
 
 fn mean_calc(data: Vec<f64>) -> f64 {
@@ -231,7 +292,9 @@ fn init_alphas_betas_pairs(cell_data: &Vec<CellData>, loci_used: &HashSet<usize>
             beta += counts[0];
         }
 
-        alphas_betas_pairs.insert(*locus, vec![alpha as usize, beta as usize]);
+        alphas_betas_pairs.insert(*locus, vec![alpha as usize, beta as usize]); // alt = alpha, ref = beta
+
+
 
     }
 
@@ -401,15 +464,16 @@ struct CellData {
     allele_fractions: Vec<f32>,
     log_binomial_coefficient: Vec<f32>,
     alt_counts: Vec<u32>,
-    ref_counts: Vec<u32>, // 
-    loci: Vec<usize>,// ID
+    ref_counts: Vec<u32>, 
+    loci: Vec<usize>,
     total_alleles: f32,
+
 }
 
 impl CellData {
     fn new(ID: usize) -> CellData {
         CellData{
-            cell_id: 0,
+            cell_id: ID,
             barcode: String::new(),
             allele_fractions: Vec::new(),
             log_binomial_coefficient: Vec::new(),
@@ -447,19 +511,19 @@ fn load_ground_truth(params: &Params) -> io::Result<(HashMap<String, String>, Ve
 
     for line_result in reader.lines() {
         let line = line_result.expect("Unable to read a line in the ground truth file");
-        let columns: Vec<&str> = line.split('\t').collect(); // Use tab as the separator
+        let columns: Vec<&str> = line.split('\t').collect(); 
 
         if columns.len() == 2 {
+
             let barcode = columns[0].to_string();
             let assignment = columns[1].to_string();
 
             ground_truth_map.insert(barcode.clone(), assignment.clone());
-
             ground_truth_vec.push(vec![barcode, assignment]);
+
         } else {
 
             eprintln!("Invalid line format: {}", line);
-            //add the correct forpat
             eprintln!("The correct format is: barcode\tassignment");
         }
     }
@@ -516,3 +580,85 @@ impl output {
 
 
 
+// fn load_cell_data2(params: &Params){
+
+//     // cell_id_to_assignment
+//     // barcode_to_cell_id
+//     // locus_to_cell_ids
+
+
+//     // I need a Hashmap of cell_id to cell_data
+//     // I need a Hashmap of barcode to cell_id
+
+//     let cell_id_to_cell_data: HashMap<usize, CellData> = HashMap::new();
+//     let locus_to_cell_ids: HashMap<String, (i32, i32, Vec<i32>)> = HashMap::new(); //ref_counts, alt_counts, <cell_ids>
+    
+
+//     let mut total_loci = 0;
+//     let mut total_cells = 0;
+//     let mut line_number = 0;
+
+
+
+//     let (ground_truth_barcode_to_assignment, ground_truth_barcode_and_assignments) = load_ground_truth(&params).unwrap();
+//     let cell_barcodes = load_barcodes(&params);
+
+
+//     let alt_reader = File::open(params.alt_mtx.to_string()).expect("cannot open alt mtx file");
+//     let alt_reader = BufReader::new(alt_reader);
+//     let ref_reader = File::open(params.ref_mtx.to_string()).expect("cannot open ref mtx file");
+//     let ref_reader = BufReader::new(ref_reader);
+
+//     for (alt_line, ref_line) in izip!(alt_reader.lines(), ref_reader.lines()) {
+
+//         let alt_line = alt_line.expect("cannot read alt mtx");
+//         let ref_line = ref_line.expect("cannot read ref mtx");
+//         if line_number > 2 {
+//             let alt_tokens: Vec<&str> = alt_line.split_whitespace().collect();
+//             let ref_tokens: Vec<&str> = ref_line.split_whitespace().collect();
+//             let cell_id = alt_tokens[1].to_string().parse::<usize>().unwrap() - 1;
+//             let locus_id = alt_tokens[0].to_string().parse::<usize>().unwrap() - 1;
+//             let alt_count = alt_tokens[2].to_string().parse::<u32>().unwrap();
+//             let ref_count = ref_tokens[2].to_string().parse::<u32>().unwrap();
+
+//             assert!(locus_id < total_loci);
+//             assert!(cell_id < total_cells);
+
+//             locus_to_cell_ids.entry(locus_id).and_modify(|e| {
+//                 e.0 += ref_count as i32;
+//                 e.1 += alt_count as i32;
+//                 e.2.push(cell_id);
+//             }).or_insert((ref_count as i32, alt_count as i32, vec![cell_id])); // locus_id to cell_ids that express this locus
+
+//             let temp_cell = CellData::new(cell_id);
+//             temp_cell.alt_counts.push(alt_count);
+//             temp_cell.ref_counts.push(ref_count);
+//             temp_cell.loci.push(locus_id);
+//             temp_cell.total_alleles += (alt_count + ref_count) as f32;
+
+
+//             let cell_id_to_cell_data = cell_id_to_cell_data.entry(cell_id).or_insert(CellData::new(cell_id)); // cell_id to cell_data
+
+
+
+
+
+//         }
+//         else{
+//             let tokens: Vec<&str> = alt_line.split_whitespace().collect();
+//             total_loci = tokens[0].to_string().parse::<usize>().unwrap();
+//             total_cells = tokens[1].to_string().parse::<usize>().unwrap();
+//         }
+//         line_number += 1;
+
+//         //insert into cell_id_to_cell_data 
+
+
+
+//     }
+
+
+    
+    
+
+// }
