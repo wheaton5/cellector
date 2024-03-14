@@ -88,18 +88,18 @@ fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_
     let mut normalized_log_likelihoods: Vec<f64> = vec![0.0; cell_data.len()];
 
 
-
-
-
-
     let mut cell_index_to_outputs: HashMap<usize, output> = HashMap::new();
 
-   
+
+
     let mut barcode_index = 0;
+
+
     for (i, cell) in cell_data.iter().enumerate() {
 
         let mut barcode = cell_barcodes[barcode_index].clone();
         let ground_truth = ground_truth_barcode_to_assignment.get(&barcode).unwrap().clone();
+        
         let mut normalized_likelihood = 0.0;
         let mut cell_likelihood = 0.0;
         let assignment = String::from("unassigned");
@@ -124,19 +124,47 @@ fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_
         }
 
         normalized_likelihood = cell_likelihood / cell.total_alleles as f64;
+        normalized_log_likelihoods[i] = normalized_likelihood;
 
         
-        // cell_index_to_outputs.insert(i, output::new(barcode.clone(), ground_truth.clone(), normalized_likelihood, assignment, cell.clone()));
+        cell_index_to_outputs.insert(i, output::new(barcode.clone(), ground_truth.clone(), normalized_likelihood, assignment, cell.clone()));
         // println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
         barcode_index += 1;
-        println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
+        // println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
+        let cell_hashing = ground_truth_barcode_to_assignment.get(&barcode).unwrap().clone();
+        println!("({}){}\t{}\t{}", i, barcode, cell_hashing, normalized_likelihood);
+
 
     }
 
+    println!("first iteration done\n");
+    println!("removing sigma 4 outliers\n");
+
+    let mean: f64 = normalized_log_likelihoods.iter().sum::<f64>() / normalized_log_likelihoods.len() as f64;
+    let variance: f64 = normalized_log_likelihoods.iter()
+        .map(|&value| {
+            let diff = value - mean;
+            diff * diff
+        })
+        .sum::<f64>() / (normalized_log_likelihoods.len() - 1) as f64;
+    let std_dev = variance.sqrt();
+
+     for i in 0..normalized_log_likelihoods.len() {
+        if normalized_log_likelihoods[i] > mean + 4.0 * std_dev {
+            println!("removing outlier: {}", i);
+        }
+     }
 
 
 
 
+
+}
+
+fn mean_calc(data: Vec<f64>) -> f64 {
+    let sum: f64 = data.iter().sum();
+    let mean = sum / data.len() as f64;
+    mean
 }
 
 fn log_sum_exp(likelihood_1: f64, likelihood_2: f64) -> f64 {
@@ -160,13 +188,13 @@ fn log_beta_binomial_PMF(locus_index: &usize, alphas_betas_pairs: HashMap<usize,
     let alt_count = cell.alt_counts[i];
     
     let num_params = alt_count as usize + alpha ;
-    let denom_params = ref_count as usize + beta ;
+    let denom_params =  ref_count as usize + beta ;
 
 
-    let log_prob_num = log_beta_calc(num_params, denom_params);
-    let log_prob_denom = log_beta_calc(alpha, beta);
+    let num = log_beta_calc(num_params, denom_params);
+    let denom = log_beta_calc(alpha, beta);
 
-    log_likelihood = ((log_binomial_coefficient as f64 + log_prob_num) - log_prob_denom);
+    log_likelihood = (log_binomial_coefficient as f64) + num - denom;
 
 
     log_likelihood
