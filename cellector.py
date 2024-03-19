@@ -4,6 +4,9 @@ from scipy.stats import betabinom
 import argparse
 from plotnine import *
 import numpy as np
+import subprocess
+import pandas as pd
+import os
 
 parser = argparse.ArgumentParser(description="find outlier genotype cells in single cell experiment")
 parser.add_argument("-a","--alt", required=True, help="alt.mtx from vartrix")
@@ -12,7 +15,13 @@ parser.add_argument("--min_ref", required=False, default = 10, type=int, help="m
 parser.add_argument("--min_alt", required=False, default = 10, type=int, help="minimum alt count to use loci")
 parser.add_argument("--barcodes", required=True, help="barcodes.tsv file")
 parser.add_argument("--ground_truth", required=False, help="cell hashing assignments to barcodes or similar, two columns first column barcode, second column ground truth assignment")
+parser.add_argument("--output_prefix", required=True, help="output prefix")
 args = parser.parse_args()
+
+if os.path.isdir(args.output_prefix):
+    print("restarting pipeline in existing directory? not implemented yet " + args.output_prefix)
+else:
+    subprocess.check_call(["mkdir", "-p", args.output_prefix])
 
 barcode_assignment = {} # map from barcode to assignment
 cell_id_assignment = {}
@@ -37,8 +46,9 @@ if args.ground_truth:
 
 loci_used = set() # is this gonna be a set or list?
 
-cell_data = {} # map from cell id to map from loci to counts
-loci_counts = {}
+cell_data = {} # map from cell id to map from loci to ref,alt counts
+loci_counts = {} # map from locus to ref,alt counts
+
 with open(args.alt) as altfile:
     altfile.readline()
     altfile.readline()
@@ -79,45 +89,103 @@ for locus in loci_counts.keys():
 
 loci_used_sorted = sorted(list(loci_used))
 
-cell_log_likelihoods = {} # map from cell id to [log_likelihood, #loci_used, #alleles_used]
-loci_normalized = []
-alleles_normalized = []
-print("\t".join(["cell_idx","barcode","assignment","log_likelihood","num_loci_used","num_alleles_used","log_likelihood_loci_normalized","log_likelihood_alleles_normalized"]))
-for cell_id in cell_data.keys():
-    log_likelihood = 0
-    num_loci_used = 0
-    num_alleles_used = 0
-    cell_counts = cell_data[cell_id]
-    for locus in cell_counts.keys():
-        if locus in loci_used:
-            locus_counts = loci_counts[locus]
-            alpha = locus_counts[1] + 1 # bayes prior alpha 1 and beta 1
-            beta = locus_counts[0] + 1
-            cell_locus_counts =  cell_counts[locus]
-            num_alt = cell_locus_counts[1]
-            num_ref = cell_locus_counts[0]
-            num_loci_used += 1
-            total_alleles = num_alt + num_ref
-            num_alleles_used += total_alleles
-            #dist = betabinom(total_alleles, alpha, beta)
-            log_likelihood += betabinom.logpmf(num_alt, total_alleles, alpha, beta)
-    cell_log_likelihoods[cell_id] = [log_likelihood, num_loci_used, num_alleles_used]
-    assignment = "na"
-    if cell_id in cell_id_assignment:
-        assignment = cell_id_assignment[cell_id]
-    if num_loci_used > 0 and num_alleles_used > 0:
-        loci_normalized.append(log_likelihood / num_loci_used)
-        alleles_normalized.append(log_likelihood / num_alleles_used)
-        print("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), str(log_likelihood/num_loci_used), str(log_likelihood/num_alleles_used)]))
-    else:
-        print("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), "0", "0"]))
 
-mean_loci_normalized = np.mean(loci_normalized)
-sd_loci_normalized = np.std(loci_normalized)
+cells_to_exclude = set()
+iteration = 0
+any_change = True
+while any_change:
+    any_change = False
+    cell_log_likelihoods = {} # map from cell id to [log_likelihood, #loci_used, #alleles_used]
+    loci_normalized = []
+    alleles_normalized = []
+    beta_alpha = {}
+    for locus in loci_used:
+        locus_counts = loci_counts[locus]
+        alpha = locus_counts[1] + 1 # bayes prior alpha 1 and beta 1
+        beta = locus_counts[0] + 1
+        beta_alpha[locus] = [beta, alpha]
+    for cell_id in cells_to_exclude:
+        cell_counts = cell_data[cell_id]
+        for locus in cell_counts.keys():
+            if locus in loci_used:
+                cell_locus_counts = cell_counts[locus]
+                num_alt = cell_locus_counts[1]
+                num_ref = cell_locus_counts[0]
+                beta_alpha[locus][0] -= num_ref
+                beta_alpha[locus][1] -= num_alt
+                 
+    filename = args.output_prefix+"/iteration_"+str(iteration)+".tsv"
+    with open(filename, 'w') as out:
+        out.write("\t".join(["cell_idx","barcode","assignment","log_likelihood","num_loci_used","num_alleles_used","neg_log_likelihood_loci_normalized","neg_log_likelihood_alleles_normalized"])+"\n")
+        for cell_id in cell_data.keys():
+            log_likelihood = 0
+            num_loci_used = 0
+            num_alleles_used = 0
+            cell_counts = cell_data[cell_id]
+            for locus in cell_counts.keys():
+                if locus in loci_used:
+                    beta, alpha = beta_alpha[locus]
+                    cell_locus_counts =  cell_counts[locus]
+                    num_alt = cell_locus_counts[1]
+                    num_ref = cell_locus_counts[0]
+                    num_loci_used += 1
+                    total_alleles = num_alt + num_ref
+                    num_alleles_used += total_alleles
+                    #dist = betabinom(total_alleles, alpha, beta)
+                    log_likelihood += betabinom.logpmf(num_alt, total_alleles, alpha, beta)
+            if num_loci_used > 0:
+                cell_log_likelihoods[cell_id] = log_likelihood/num_loci_used
+            else:
+                cell_log_likelihoods[cell_id] = 0.0
+            assignment = "na"
+            if cell_id in cell_id_assignment:
+                assignment = cell_id_assignment[cell_id]
+            if num_loci_used > 0 and num_alleles_used > 0:
+                loci_normalized.append(log_likelihood / num_loci_used)
+                alleles_normalized.append(log_likelihood / num_alleles_used)
+                out.write("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), str(-log_likelihood/num_loci_used), str(-log_likelihood/num_alleles_used)])+"\n")
+            else:
+                out.write("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), "0", "0"])+"\n")
 
-print("loci normalized mean=",mean_loci_normalized, " std=",sd_loci_normalized, " 3 sigma threshold=",mean_loci_normalized-3*sd_loci_normalized)
+        mean_loci_normalized = np.mean(loci_normalized)
+        sd_loci_normalized = np.std(loci_normalized)
 
-mean_alleles_normalized = np.mean(alleles_normalized)
-sd_alleles_normalized = np.std(alleles_normalized)
+        sorted_loci_norm = sorted(loci_normalized)
+        median = sorted_loci_norm[len(loci_normalized)//2]
+        q1 = sorted_loci_norm[len(loci_normalized)//4]
+        q3 = sorted_loci_norm[int(len(loci_normalized)*0.75)]
+        interquartile_range = q3 - q1
+        threshold = q1 - 4*interquartile_range
 
-print("alleles normalized mean=",mean_alleles_normalized, " std=",sd_alleles_normalized, " 3 sigma threshold=",mean_alleles_normalized-3*sd_alleles_normalized)
+        print("loci normalized median=",median, " iqr=",interquartile_range, " q1-4*iqr=",threshold)        
+        print("loci normalized mean=",mean_loci_normalized, " std=",sd_loci_normalized, " 3 sigma threshold=",mean_loci_normalized-3*sd_loci_normalized)
+        df = pd.read_csv(filename,sep="\t")
+        graphname = filename[:-4]+".pdf"
+        print(graphname)
+        graph = ggplot(df)+geom_point(aes(x="cell_idx",y="neg_log_likelihood_loci_normalized",size="num_loci_used",color="assignment"))+geom_abline(intercept=-threshold,slope=0)
+        save_as_pdf_pages([graph],filename=graphname)
+
+        #threshold = mean_loci_normalized - 3*sd_loci_normalized
+        removed_cells = 0
+        for (cell_id, log_likelihood) in cell_log_likelihoods.items():
+            if log_likelihood < threshold:
+                if not(cell_id in cells_to_exclude):
+                    removed_cells += 1
+                    any_change = True
+                    cells_to_exclude.add(cell_id)
+        print("removed ",removed_cells," in the ",iteration," iteration")
+        iteration += 1
+with open(args.output_prefix+"/cellector_assignments.tsv",'w') as out:
+    out.write("\t".join(["barcode","cellector_assignment","ground_truth_assignment"])+"\n")
+    with open(args.barcodes) as infile:
+        for line in infile:
+            bc = line.strip()
+            cell_id = barcode_to_cell_id[bc]
+            assignment = "majority"
+            if cell_id in cells_to_exclude:
+                assignment = "minority"
+            gt = "na"
+            if cell_id in cell_id_assignment:
+                gt = cell_id_assignment[cell_id]
+        
+            out.write("\t".join([bc,assignment,gt])+"\n")
