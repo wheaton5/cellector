@@ -58,153 +58,94 @@ fn main() {
 
     let cell_barcodes = load_barcodes(&params);
 
+    let (loci_used, cells, coefficients, locus_counts, i) = load_cell_data(&params, ground_truth_barcode_to_assignment.clone(), cell_barcodes.clone());
 
-    let (cells, coefficients, locus_counts) = load_cell_data(&params, ground_truth_barcode_to_assignment.clone(), cell_barcodes.clone());
+    // let x = i.get(&10707).unwrap();
+    // println!("{:?}", x);
+    // let y = i.get(&6831).unwrap();
+    // println!("{:?}", y);
     
-
-
-
-    // cellector(cell_data, loci_used, &locus_to_cell_ids, locus_to_cell_data, 
-    //     ground_truth_barcode_and_assignments, ground_truth_barcode_to_assignment, cell_barcodes, index_to_locus, locus_to_index);
+    cellector(loci_used, cells, coefficients, locus_counts);
 
 }
 
 
 
-fn cellector(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_ids: &HashMap<usize, Vec<usize>>, 
-    locus_to_cell_data: HashMap<usize,
-    HashMap<usize, [u32; 2]>>,
-    ground_truth_vec: Vec<Vec<String>>, ground_truth_barcode_to_assignment: HashMap<String, String>,
-    cell_barcodes: Vec<String>,
-    index_to_locus: Vec<usize>,
-    locus_to_index : HashMap<usize, usize>,
-    ){
 
-    // make sure the data is loaded correctly
+fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Vec<f32>>, locus_counts: Vec<Vec<[usize; 3]>>) {
 
-    eprintln!("cellector...");
+    let mut alphas_betas_pairs = init_alphas_betas_pairs(loci_used,&locus_counts);
+    let mut normalized_log_likelihoods: Vec<f32> = vec![0.0; cell_data.len()];
 
-    let mut alphas_betas_pairs = init_alphas_betas_pairs(&cell_data, &loci_used, &locus_to_cell_data);
-    let mut normalized_log_likelihoods: Vec<f64> = vec![0.0; cell_data.len()];
-    let mut cell_index_to_outputs: HashMap<usize, output> = HashMap::new();
-    let mut barcode_index = 0;
+    println!("loci used: {}", loci_used);
+    println!("cell data: {:?}", cell_data.len());
+    println!("coefficients: {:?}", coefficients.len());
+    println!("locus counts: {:?}", locus_counts.len());
 
 
-    for (i, cell) in cell_data.iter().enumerate() {
+    for (cell_index, cells_locus_counts) in locus_counts.iter().enumerate() {
 
-        let mut barcode = cell_barcodes[barcode_index].clone();
-        let ground_truth = ground_truth_barcode_to_assignment.get(&barcode).unwrap().clone();
-        
         let mut normalized_likelihood = 0.0;
         let mut cell_log_likelihood = 0.0;
-        let assignment = String::from("unassigned");
+        let cell_loci = coefficients[cell_index].len();
 
-        
 
-        for (j, locus_index) in cell.loci.iter().enumerate() {
+        for (cell_locus_index, locus_count) in cells_locus_counts.iter().enumerate() {
 
-            // let locus = index_to_locus[*locus_index];
-            // if !loci_used.contains(&locus) {
-            //     continue;
-            // }
-
-           
-            let log_likelihood = log_beta_binomial_PMF(locus_index, alphas_betas_pairs.clone(), cell, j, index_to_locus.clone());
-
-            assert!(log_likelihood <= 0.0);
-            
-            cell_log_likelihood += log_likelihood;
-           
-
-            
-
+            let locus_index = locus_count[0];
+            let ref_count = locus_count[1];
+            let alt_count = locus_count[2];
+            let coefficient = coefficients[cell_index][cell_locus_index];
+            let alpha = alphas_betas_pairs[0][locus_index];
+            let beta = alphas_betas_pairs[1][locus_index];
+            let cell_log_likelihood_locus = log_beta_binomial_PMF(alt_count, ref_count, alpha, beta, coefficient);
+            cell_log_likelihood += cell_log_likelihood_locus;
         }
 
-        normalized_likelihood = cell_log_likelihood / cell.alt_counts.len() as f64;
-        normalized_log_likelihoods[i] = normalized_likelihood;
-
         
-        cell_index_to_outputs.insert(i, output::new(barcode.clone(), ground_truth.clone(), normalized_likelihood, assignment, cell.clone()));
-        println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
-        barcode_index += 1;
-      
-
+        normalized_likelihood = cell_log_likelihood / cell_loci as f32;
+        println!("normalized_likelihood: {}", normalized_likelihood);
+        normalized_log_likelihoods[cell_index] = normalized_likelihood;
 
     }
-
-
-    let mut writer = Writer::from_path("output.csv").unwrap();
-    writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
-
-    for (i, output) in cell_index_to_outputs.iter() {
-
-        let loci = output.CellData.ref_counts.len().to_string();
-        writer.write_record(&[&output.barcode, &output.ground_truth, &output.likelihood.to_string(), &loci]).unwrap();
-    }
-
     println!("first iteration done\n");
-    println!("removing sigma 4 outliers\n");
-
-    let mean: f64 = normalized_log_likelihoods.iter().sum::<f64>() / normalized_log_likelihoods.len() as f64;
-    let variance: f64 = calculate_variance(&normalized_log_likelihoods, mean);
-    let std_dev = variance.sqrt();
-
-    
-    let mut num_removed = 0;
-    let mut removed_outliers: Vec<usize> = Vec::new();
-    let mut removing_step = 0;
-
-    loop{
-
-        if removing_step == 0{
-            for i in 0..normalized_log_likelihoods.len() {
-                if normalized_log_likelihoods[i] > mean + 4.0 * std_dev {
-                    removed_outliers.push(i);
-                    num_removed += 1;
-                }
-            }
-            removing_step = 1;
-        }
-        else{
-            // // recalculate the mean without removed cells
-            // let mut new_mean = 0.0;
-            // let mut new_variance = 0.0;
-            // let mut new_std_dev = 0.0;
-            // let mut new_normalized_log_likelihoods: Vec<f64> = Vec::new();
-            // for i in 0..normalized_log_likelihoods.len() {
-            //     if !removed_outliers.contains(&i) {
-            //         new_normalized_log_likelihoods.push(normalized_log_likelihoods[i]);
-            //     }
-            // }
-            // new_mean = new_normalized_log_likelihoods.iter().sum::<f64>() / new_normalized_log_likelihoods.len() as f64;
-            // new_variance = calculate_variance(&new_normalized_log_likelihoods, new_mean);
-            // new_std_dev = new_variance.sqrt();
-
-            // //remove new 4-sigma outliers
-            // for i in 0..new_normalized_log_likelihoods.len() {
-            //     if new_normalized_log_likelihoods[i] > new_mean + 4.0 * new_std_dev {
-            //         removed_outliers.push(i);
-            //         num_removed += 1;
-            //     }
-            // }
-        }
-    
-        if num_removed == 0 {
-            break; 
-        }
-        println!("{} outliers removed", num_removed);
-        num_removed = 0;
-    }
-
-    for i in removed_outliers.iter() {
-        let mut output = cell_index_to_outputs.get_mut(i).unwrap();
-        println!("{}\t{}\t{}", output.barcode, output.likelihood,output.ground_truth);
-    }
-    
 
 
 }
 
+
+fn log_beta_binomial_PMF(alt_count: usize, ref_count: usize, alpha: usize, beta: usize, coefficient: f32) -> f32 {
+
+    let num_params = alt_count + alpha;
+    let denom_params = ref_count + beta;
+    let num = log_beta_calc(num_params, denom_params);
+    let denom = log_beta_calc(alpha, beta);
+    let log_likelihood = (coefficient as f32) + num as f32 - denom as f32;
+    log_likelihood
+
+}
+
+
+fn init_alphas_betas_pairs(loci_used: usize,locus_counts: &Vec<Vec<[usize; 3]>>) ->  Vec<Vec<usize>>{
+
+    let mut alphas_betas_pairs: Vec<Vec<usize>> = vec![vec![1; loci_used], vec![1; loci_used]];
+
+    for (cell_index, cell_loci) in locus_counts.iter().enumerate() {
+
+        for locus in cell_loci.iter() {
+
+            let locus_index = locus[0];
+            let ref_count = locus[1];
+            let alt_count = locus[2];
+            alphas_betas_pairs[0][locus_index] += alt_count;
+            alphas_betas_pairs[1][locus_index] += ref_count;
+
+        }
+
+    }
+
+    alphas_betas_pairs
+}
 
 
 fn calculate_variance(values: &[f64], mean: f64) -> f64 {
@@ -228,39 +169,6 @@ fn mean_calc(data: Vec<f64>) -> f64 {
     mean
 }
 
-fn log_sum_exp(likelihood_1: f64, likelihood_2: f64) -> f64 {
-    let max = likelihood_1.max(likelihood_2);
-    let sum = (likelihood_1 - max).exp() + (likelihood_2 - max).exp();
-    sum.ln() + max
-}
-
-
-fn log_beta_binomial_PMF(locus_index: &usize, alphas_betas_pairs: HashMap<usize, Vec<usize>>, cell: &CellData, i: usize, index_to_locus: Vec<usize>
-) -> f64 {
-
-    let mut log_likelihood = 0.0 as f64;
-
-    let locus = index_to_locus[*locus_index];
-    let alpha = alphas_betas_pairs.get(&locus).unwrap()[0];
-    let beta = alphas_betas_pairs.get(&locus).unwrap()[1];
-
-    let log_binomial_coefficient = cell.log_binomial_coefficient[i];
-    let ref_count = cell.ref_counts[i];
-    let alt_count = cell.alt_counts[i];
-    
-    let num_params = alt_count as usize + alpha ;
-    let denom_params =  ref_count as usize + beta ;
-
-
-    let num = log_beta_calc(num_params, denom_params);
-    let denom = log_beta_calc(alpha, beta);
-
-    log_likelihood = (log_binomial_coefficient as f64) + num - denom;
-
-
-    log_likelihood
-}
-
 
 
 fn log_beta_calc(alpha: usize, beta: usize) -> f64 {
@@ -276,30 +184,6 @@ fn log_beta_calc(alpha: usize, beta: usize) -> f64 {
 
 
 
-fn init_alphas_betas_pairs(cell_data: &Vec<CellData>, loci_used: &HashSet<usize>, locus_to_cell_data: &HashMap<usize, HashMap<usize, [u32; 2]>>) -> HashMap<usize, Vec<usize>> {
-
-    // let mut alphas_betas_pairs : Vec<Vec<usize>> = vec![vec![0; loci_used.len()]; 3];
-    let mut alphas_betas_pairs : HashMap<usize, Vec<usize>> = HashMap::new();
-
-    for locus in loci_used.iter() {
-        
-
-        let mut alpha = 1;
-        let mut beta = 1;
-
-        for (cell, counts) in locus_to_cell_data.get(locus).unwrap() {
-            alpha += counts[1];
-            beta += counts[0];
-        }
-
-        alphas_betas_pairs.insert(*locus, vec![alpha as usize, beta as usize]); // alt = alpha, ref = beta
-
-
-
-    }
-
-    alphas_betas_pairs
-}
 
 
 
@@ -331,7 +215,7 @@ fn load_params() -> Params{
 
 
 fn load_cell_data(params: &Params, ground_truth_barcode_to_assignment: HashMap<String, String>, cell_barcodes: Vec<String>) 
--> (Vec<CellStruct>, Vec<Vec<f32>>, Vec<Vec<[usize; 3]>>){
+-> (usize, Vec<CellStruct>, Vec<Vec<f32>>, Vec<Vec<[usize; 3]>>, HashMap<usize, usize>){
 
     let alt_reader = File::open(params.alt_mtx.to_string()).expect("cannot open alt mtx file");
     let ref_reader = File::open(params.ref_mtx.to_string()).expect("cannot open ref mtx file");
@@ -394,10 +278,12 @@ fn load_cell_data(params: &Params, ground_truth_barcode_to_assignment: HashMap<S
     eprintln!("filtering loci...");
 
     let mut locus_index = 0;
+    let mut index_to_locus_map : HashMap<usize, usize> = HashMap::new();
 
     for (locus, counts) in &locus_alt_ref_cell_counts {
         if counts[0] >= params.min_ref && counts[1] >= params.min_alt {
             locus_to_locus_index.insert(*locus, locus_index);
+            index_to_locus_map.insert(locus_index, *locus);
             locus_index += 1;
         }
     }
@@ -456,7 +342,7 @@ fn load_cell_data(params: &Params, ground_truth_barcode_to_assignment: HashMap<S
     }
 
 
-    (cell_structs_vec, cell_index_to_coefficients, cell_index_to_locus_counts)
+    (locus_to_locus_index.len(), cell_structs_vec, cell_index_to_coefficients, cell_index_to_locus_counts, index_to_locus_map)
 
 
 }
@@ -723,4 +609,196 @@ impl output {
 
     
 //     (locus_counts, used_loci, total_cells, cell_data, index_to_locus, locus_to_index, locus_to_cell_ids)
+// }
+
+
+
+// fn cellector_2(cell_data: Vec<CellData>, loci_used: HashSet<usize>, locus_to_cell_ids: &HashMap<usize, Vec<usize>>, 
+//     locus_to_cell_data: HashMap<usize,
+//     HashMap<usize, [u32; 2]>>,
+//     ground_truth_vec: Vec<Vec<String>>, ground_truth_barcode_to_assignment: HashMap<String, String>,
+//     cell_barcodes: Vec<String>,
+//     index_to_locus: Vec<usize>,
+//     locus_to_index : HashMap<usize, usize>,
+//     ){
+
+//     // make sure the data is loaded correctly
+
+//     eprintln!("cellector...");
+
+//     let mut alphas_betas_pairs = init_alphas_betas_pairs(&cell_data, &loci_used, &locus_to_cell_data);
+//     let mut normalized_log_likelihoods: Vec<f64> = vec![0.0; cell_data.len()];
+//     let mut cell_index_to_outputs: HashMap<usize, output> = HashMap::new();
+//     let mut barcode_index = 0;
+
+
+//     for (i, cell) in cell_data.iter().enumerate() {
+
+//         let mut barcode = cell_barcodes[barcode_index].clone();
+//         let ground_truth = ground_truth_barcode_to_assignment.get(&barcode).unwrap().clone();
+        
+//         let mut normalized_likelihood = 0.0;
+//         let mut cell_log_likelihood = 0.0;
+//         let assignment = String::from("unassigned");
+
+        
+
+//         for (j, locus_index) in cell.loci.iter().enumerate() {
+
+//             // let locus = index_to_locus[*locus_index];
+//             // if !loci_used.contains(&locus) {
+//             //     continue;
+//             // }
+
+           
+//             let log_likelihood = log_beta_binomial_PMF(locus_index, alphas_betas_pairs.clone(), cell, j, index_to_locus.clone());
+
+//             assert!(log_likelihood <= 0.0);
+            
+//             cell_log_likelihood += log_likelihood;
+           
+
+            
+
+//         }
+
+//         normalized_likelihood = cell_log_likelihood / cell.alt_counts.len() as f64;
+//         normalized_log_likelihoods[i] = normalized_likelihood;
+
+        
+//         cell_index_to_outputs.insert(i, output::new(barcode.clone(), ground_truth.clone(), normalized_likelihood, assignment, cell.clone()));
+//         println!("{}\tbarcode: {} ground_truth: {} likelihood: {}", i,barcode, ground_truth, normalized_likelihood);
+//         barcode_index += 1;
+      
+
+
+//     }
+
+
+//     let mut writer = Writer::from_path("output.csv").unwrap();
+//     writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
+
+//     for (i, output) in cell_index_to_outputs.iter() {
+
+//         let loci = output.CellData.ref_counts.len().to_string();
+//         writer.write_record(&[&output.barcode, &output.ground_truth, &output.likelihood.to_string(), &loci]).unwrap();
+//     }
+
+//     println!("first iteration done\n");
+//     println!("removing sigma 4 outliers\n");
+
+//     let mean: f64 = normalized_log_likelihoods.iter().sum::<f64>() / normalized_log_likelihoods.len() as f64;
+//     let variance: f64 = calculate_variance(&normalized_log_likelihoods, mean);
+//     let std_dev = variance.sqrt();
+
+    
+//     let mut num_removed = 0;
+//     let mut removed_outliers: Vec<usize> = Vec::new();
+//     let mut removing_step = 0;
+
+//     loop{
+
+//         if removing_step == 0{
+//             for i in 0..normalized_log_likelihoods.len() {
+//                 if normalized_log_likelihoods[i] > mean + 4.0 * std_dev {
+//                     removed_outliers.push(i);
+//                     num_removed += 1;
+//                 }
+//             }
+//             removing_step = 1;
+//         }
+//         else{
+//             // // recalculate the mean without removed cells
+//             // let mut new_mean = 0.0;
+//             // let mut new_variance = 0.0;
+//             // let mut new_std_dev = 0.0;
+//             // let mut new_normalized_log_likelihoods: Vec<f64> = Vec::new();
+//             // for i in 0..normalized_log_likelihoods.len() {
+//             //     if !removed_outliers.contains(&i) {
+//             //         new_normalized_log_likelihoods.push(normalized_log_likelihoods[i]);
+//             //     }
+//             // }
+//             // new_mean = new_normalized_log_likelihoods.iter().sum::<f64>() / new_normalized_log_likelihoods.len() as f64;
+//             // new_variance = calculate_variance(&new_normalized_log_likelihoods, new_mean);
+//             // new_std_dev = new_variance.sqrt();
+
+//             // //remove new 4-sigma outliers
+//             // for i in 0..new_normalized_log_likelihoods.len() {
+//             //     if new_normalized_log_likelihoods[i] > new_mean + 4.0 * new_std_dev {
+//             //         removed_outliers.push(i);
+//             //         num_removed += 1;
+//             //     }
+//             // }
+//         }
+    
+//         if num_removed == 0 {
+//             break; 
+//         }
+//         println!("{} outliers removed", num_removed);
+//         num_removed = 0;
+//     }
+
+//     for i in removed_outliers.iter() {
+//         let mut output = cell_index_to_outputs.get_mut(i).unwrap();
+//         println!("{}\t{}\t{}", output.barcode, output.likelihood,output.ground_truth);
+//     }
+    
+
+
+// }
+
+
+
+
+// fn init_alphas_betas_pairs(cell_data: &Vec<CellData>, loci_used: &HashSet<usize>, locus_to_cell_data: &HashMap<usize, HashMap<usize, [u32; 2]>>) -> HashMap<usize, Vec<usize>> {
+
+//     // let mut alphas_betas_pairs : Vec<Vec<usize>> = vec![vec![0; loci_used.len()]; 3];
+//     let mut alphas_betas_pairs : HashMap<usize, Vec<usize>> = HashMap::new();
+
+//     for locus in loci_used.iter() {
+        
+
+//         let mut alpha = 1;
+//         let mut beta = 1;
+
+//         for (cell, counts) in locus_to_cell_data.get(locus).unwrap() {
+//             alpha += counts[1];
+//             beta += counts[0];
+//         }
+
+//         alphas_betas_pairs.insert(*locus, vec![alpha as usize, beta as usize]); // alt = alpha, ref = beta
+
+
+
+//     }
+
+//     alphas_betas_pairs
+// }
+
+
+
+
+// fn log_beta_binomial_PMF(locus_index: &usize, alphas_betas_pairs: HashMap<usize, Vec<usize>>, cell: &CellData, i: usize, index_to_locus: Vec<usize>) -> f64 {
+
+//     let mut log_likelihood = 0.0 as f64;
+
+//     let locus = index_to_locus[*locus_index];
+//     let alpha = alphas_betas_pairs.get(&locus).unwrap()[0];
+//     let beta = alphas_betas_pairs.get(&locus).unwrap()[1];
+
+//     let log_binomial_coefficient = cell.log_binomial_coefficient[i];
+//     let ref_count = cell.ref_counts[i];
+//     let alt_count = cell.alt_counts[i];
+    
+//     let num_params = alt_count as usize + alpha ;
+//     let denom_params =  ref_count as usize + beta ;
+
+
+//     let num = log_beta_calc(num_params, denom_params);
+//     let denom = log_beta_calc(alpha, beta);
+
+//     log_likelihood = (log_binomial_coefficient as f64) + num - denom;
+
+
+//     log_likelihood
 // }
