@@ -82,13 +82,101 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
     println!("coefficients: {:?}", coefficients.len());
     println!("locus counts: {:?}", locus_counts.len());
 
+    normalized_log_likelihoods = calculate_normalized_log_likelihoods(&locus_counts, &coefficients, alphas_betas_pairs, &cell_data);
+    // let (minority_cluster, majority_cluster) = outlier_detector(&normalized_log_likelihoods, &Params);
 
+    print_special_floats(&normalized_log_likelihoods);
+    println!("normalized log likelihoods: {:?}", normalized_log_likelihoods.len());
+
+    ///wanna print out everything avout cell 177
+    let mut cell = 177;
+    let mut cell_loci = locus_counts[cell].clone();
+    let mut cell_coefficients = coefficients[cell].clone();
+    println!("cell: {}", cell_data[cell].barcode);
+    let (minority_cluster, majority_cluster) = iqr_detector(&normalized_log_likelihoods);
+
+
+
+
+
+    // let mut writer = csv::Writer::from_path("output.csv").unwrap();
+    // writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
+    
+    // for (i, cell) in cell_data.iter().enumerate() {
+
+    //     let record = vec![
+    //         cell.barcode.clone(),
+    //         cell.ground_truth.clone(),
+    //         normalized_log_likelihoods[i].to_string(),
+    //         locus_counts[i].len().to_string(),
+    //     ];
+    
+    //     // Write the combined record
+    //     writer.write_record(&record).unwrap();
+    // }
+
+
+   
+
+
+    // for i in minority_cluster.iter() {
+    //     println!("{}\t{}", cell_data[*i].ground_truth, normalized_log_likelihoods[*i]);
+    // }
+
+}
+
+
+
+fn calculate_normalized_log_likelihoods_filtered
+    (locus_counts: &Vec<Vec<[usize; 3]>>, coefficients: &Vec<Vec<f32>>, 
+    alphas_betas_pairs: Vec<Vec<usize>>, cell_data: &Vec<CellStruct>, majority_cluster: Vec<usize>)-> Vec<f32>{
+
+    let mut normalized_log_likelihoods: Vec<f32> = vec![0.0; cell_data.len()];
+
+    for (cell_index, cells_locus_counts) in locus_counts.iter().enumerate() {
+
+        if majority_cluster.contains(&cell_index) {
+
+            let mut normalized_likelihood = 0.0;
+            let mut cell_log_likelihood = 0.0;
+            let cell_loci = coefficients[cell_index].len();
+
+            for (cell_locus_index, locus_count) in cells_locus_counts.iter().enumerate() {
+
+                let locus_index = locus_count[0];
+                let ref_count = locus_count[1];
+                let alt_count = locus_count[2];
+                let coefficient = coefficients[cell_index][cell_locus_index];
+                let alpha = alphas_betas_pairs[0][locus_index];
+                let beta = alphas_betas_pairs[1][locus_index];
+                let cell_log_likelihood_locus = log_beta_binomial_PMF(alt_count, ref_count, alpha, beta, coefficient);
+                cell_log_likelihood += cell_log_likelihood_locus;
+            }
+
+            
+            normalized_likelihood = cell_log_likelihood / cell_loci as f32;
+            normalized_log_likelihoods[cell_index] = normalized_likelihood;
+
+        }
+    }
+    
+
+    normalized_log_likelihoods
+
+}
+
+
+fn calculate_normalized_log_likelihoods
+    (locus_counts: &Vec<Vec<[usize; 3]>>, coefficients: &Vec<Vec<f32>>, alphas_betas_pairs: Vec<Vec<usize>>, cell_data: &Vec<CellStruct>)
+     -> Vec<f32>{
+
+    let mut normalized_log_likelihoods: Vec<f32> = vec![0.0; cell_data.len()];
+    
     for (cell_index, cells_locus_counts) in locus_counts.iter().enumerate() {
 
         let mut normalized_likelihood = 0.0;
         let mut cell_log_likelihood = 0.0;
         let cell_loci = coefficients[cell_index].len();
-
 
         for (cell_locus_index, locus_count) in cells_locus_counts.iter().enumerate() {
 
@@ -104,14 +192,113 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
 
         
         normalized_likelihood = cell_log_likelihood / cell_loci as f32;
-        println!("normalized_likelihood: {}", normalized_likelihood);
         normalized_log_likelihoods[cell_index] = normalized_likelihood;
 
     }
-    println!("first iteration done\n");
+    normalized_log_likelihoods
 
+    
 
 }
+
+
+fn reset_alpha_beta_pairs(loci_used: usize,locus_counts: &Vec<Vec<[usize; 3]>>, majority: Vec<usize>) ->  Vec<Vec<usize>>{
+
+    let mut alphas_betas_pairs: Vec<Vec<usize>> = vec![vec![1; loci_used], vec![1; loci_used]];
+
+    for cell_index in majority.iter() {
+
+        let cell_loci = locus_counts[*cell_index].clone();
+
+        for locus in cell_loci.iter() {
+
+            let locus_index = locus[0];
+            let ref_count = locus[1];
+            let alt_count = locus[2];
+            alphas_betas_pairs[0][locus_index] += alt_count;
+            alphas_betas_pairs[1][locus_index] += ref_count;
+
+        }
+
+    }
+
+    alphas_betas_pairs
+}
+
+
+
+fn outlier_detector(data: &Vec<f32>, params: &Params) -> (Vec<usize>, Vec<usize>) {
+    let (minority, majority) = if params.outlier_detector == "iqr" {
+        iqr_detector(data)
+    } else {
+        panic!("Invalid outlier detector method specified.")
+    };
+
+    (minority, majority)
+}
+
+fn print_special_floats(data: &Vec<f32>) {
+    for (index, &value) in data.iter().enumerate() {
+        if value.is_nan() {
+            println!("NaN found at index: {}", index);
+        } else if value.is_infinite() {
+            if value.is_sign_positive() {
+                println!("Positive infinity found at index: {}", index);
+            } else {
+                println!("Negative infinity found at index: {}", index);
+            }
+        }
+    }
+}
+
+
+
+
+fn iqr_detector(data: &Vec<f32>) -> (Vec<usize>, Vec<usize>) {
+    let mut sorted_data = data.clone();
+    // sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
+
+
+    let q1 = percentile(&sorted_data, 25.0);
+    let q3 = percentile(&sorted_data, 75.0);
+    let iqr = q3 - q1;
+
+    let lower_bound = q1 - 1.5 * iqr;
+
+
+    let mut minority_cluster = Vec::new();
+    let mut majority_cluster = Vec::new();
+
+
+    data.iter().enumerate().for_each(|(index, &value)| {
+        if value < lower_bound {
+            minority_cluster.push(index); 
+        } else {
+            majority_cluster.push(index); 
+        }
+    });
+
+    (minority_cluster, majority_cluster)
+}
+
+ 
+fn percentile(data: &Vec<f32>, percentile: f32) -> f32 {
+    let k = (percentile / 100.0) * ((data.len() - 1) as f32);
+    let f = k.floor() as usize;
+    let c = k.ceil() as usize;
+
+    if f != c {
+        data[f] + (k - f as f32) * (data[c] - data[f])
+    } else {
+        data[f]
+    }
+}
+
+
+
+
+
 
 
 fn log_beta_binomial_PMF(alt_count: usize, ref_count: usize, alpha: usize, beta: usize, coefficient: f32) -> f32 {
@@ -199,6 +386,7 @@ fn load_params() -> Params{
     let min_ref = params.value_of("min_ref").unwrap_or("4");
     let min_ref = min_ref.to_string().parse::<u32>().unwrap();
     let ground_truth = params.value_of("ground_truth").unwrap().to_string();
+    let outlier_detector = params.value_of("outlier_detector").unwrap_or("iqr");
 
 
     Params {
@@ -209,6 +397,7 @@ fn load_params() -> Params{
         min_alt: min_alt,
         min_ref: min_ref,
         ground_truth: ground_truth, 
+        outlier_detector: outlier_detector.to_string(),
 
     }
 }
@@ -473,6 +662,7 @@ struct Params {
     min_alt: u32,
     min_ref: u32,
     ground_truth: String,
+    outlier_detector: String,
 }
 
 
