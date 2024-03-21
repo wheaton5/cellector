@@ -8,16 +8,6 @@ extern crate rayon;
 extern crate vcf;
 extern crate flate2;
 
-/*
-
-steps to implement:
-1. finish outlier detection
-2. implement visualization
-3. test with whole data
-4. imporve performance
-
-*/
-
 
 
 extern crate csv;
