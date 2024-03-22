@@ -98,6 +98,7 @@ while any_change:
     cell_log_likelihoods = {} # map from cell id to [log_likelihood, #loci_used, #alleles_used]
     loci_normalized = []
     alleles_normalized = []
+    loci_cell_likelihoods = {} # map from locus to cell to likelihood
     beta_alpha = {}
     for locus in loci_used:
         locus_counts = loci_counts[locus]
@@ -132,7 +133,10 @@ while any_change:
                     total_alleles = num_alt + num_ref
                     num_alleles_used += total_alleles
                     #dist = betabinom(total_alleles, alpha, beta)
-                    log_likelihood += betabinom.logpmf(num_alt, total_alleles, alpha, beta)
+                    logpmf = betabinom.logpmf(num_alt, total_alleles, alpha, beta)
+                    log_likelihood += logpmf
+                    cell_likelihood = loci_cell_likelihoods.setdefault(locus, {})
+                    cell_likelihood[cell_id] = logpmf
             if num_loci_used > 0:
                 cell_log_likelihoods[cell_id] = log_likelihood/num_loci_used
             else:
@@ -174,6 +178,56 @@ while any_change:
                     any_change = True
                     cells_to_exclude.add(cell_id)
         print("removed ",removed_cells," in the ",iteration," iteration")
+        # lets find which loci contribute the most to exclusion
+        exclusion_locus_loglikes = {} #map from locus to sum of loglikelihoods from excluded cells
+        exclusion_locus_cellcounts = {}
+        exclusion_locus_alts = {}
+        exclusion_locus_refs = {}
+        majority_locus_alts = {}
+        majority_locus_refs = {}
+        for (locus, cell_likelihoods) in loci_cell_likelihoods.items():
+            exclusion_locus_loglikes.setdefault(locus, 0)
+            exclusion_locus_cellcounts.setdefault(locus, 0)
+            exclusion_locus_alts.setdefault(locus,0)
+            exclusion_locus_refs.setdefault(locus,0)
+            majority_locus_alts.setdefault(locus,0)
+            majority_locus_refs.setdefault(locus,0)
+            for (cell, log_likelihood) in cell_likelihoods.items():
+                cell_counts = cell_data[cell]
+                if locus in cell_counts:
+                    cell_locus_counts =  cell_counts[locus]
+                else:
+                    cell_locus_counts = [0,0]
+                num_alt = cell_locus_counts[1]
+                num_ref = cell_locus_counts[0]
+                if cell in cells_to_exclude:
+                    exclusion_locus_loglikes[locus] += log_likelihood
+                    exclusion_locus_cellcounts[locus] += 1
+                    exclusion_locus_alts[locus] += num_alt
+                    exclusion_locus_refs[locus] += num_ref    
+                else:
+                    majority_locus_alts[locus] += num_alt
+                    majority_locus_refs[locus] += num_ref
+        sorted_locus_loglikes = sorted(exclusion_locus_loglikes.items(), key=lambda x:x[1])
+        outfile = filename[:-4]+"_locus_contribution_minority.tsv"
+        with open(outfile,'w') as out:
+            out.write("\t".join(["locus","log_likelihood_minority","minority_cellcount", "log_likelihood_minority_per_cell","minority_alt","minority_ref","majority_alt","majority_ref","minority_af","majority_af"])+"\n")
+            for (locus, loglike) in sorted_locus_loglikes:
+                cellcounts = exclusion_locus_cellcounts[locus]
+                loglikepercell = 0
+                if cellcounts > 0:
+                    loglikepercell = loglike/cellcounts
+                minority_alt = exclusion_locus_alts[locus]
+                minority_ref = exclusion_locus_refs[locus]
+                minority_af = 0
+                if minority_alt + minority_ref > 0:
+                    minority_af = minority_alt/(minority_alt+minority_ref)
+                majority_alt = majority_locus_alts[locus]
+                majority_ref = majority_locus_refs[locus]
+                majority_af = 0
+                if majority_alt + majority_ref > 0:
+                    majority_af = majority_alt/(majority_alt+majority_ref)
+                out.write("\t".join([str(locus), str(loglike), str(exclusion_locus_cellcounts[locus]), str(loglikepercell),str(minority_alt),str(minority_ref),str(majority_alt),str(majority_ref),str(minority_af),str(majority_af)])+"\n")
         iteration += 1
 with open(args.output_prefix+"/cellector_assignments.tsv",'w') as out:
     out.write("\t".join(["barcode","cellector_assignment","ground_truth_assignment"])+"\n")
