@@ -15,6 +15,7 @@ use csv::Writer;
 use std::error::Error;
 
 
+use std::f32::consts::PI;
 
 use std::fs::OpenOptions;
 use std::io::prelude::*;
@@ -77,8 +78,8 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
     let mut alphas_betas_pairs = init_alphas_betas_pairs(loci_used,&locus_counts);
     let mut normalized_log_likelihoods: Vec<f32> = vec![0.0; cell_data.len()];
 
-    // wanna make an stack that willhold new minorities in each iteration which is just cell indices
-    let mut all_minorities: Vec<usize> = Vec::new();
+
+    let mut minority_cluster_set: HashSet<usize> = HashSet::new();
 
     // println!("loci used: {}", loci_used);
     // println!("cell data: {:?}", cell_data.len());
@@ -88,7 +89,11 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
 
     normalized_log_likelihoods = calculate_normalized_log_likelihoods(&locus_counts, &coefficients, alphas_betas_pairs.clone(), &cell_data);
     let (mut minority_cluster, mut majority_cluster) = iqr_detector(&normalized_log_likelihoods);
-    all_minorities.append(&mut minority_cluster);
+
+    for &cell_index in minority_cluster.iter() {
+        minority_cluster_set.insert(cell_index);
+    }
+
     let mut writer = Writer::from_path("output_iteration_1.csv").unwrap();
     writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
 
@@ -124,10 +129,9 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
         );
         
         let (mut minority_cluster_filtered, mut majority_cluster_filtered) = iqr_detector(&new_normalized_log_likelihoods);
-        all_minorities.append(&mut minority_cluster_filtered);
-
-        // just wanna check if there is a new minority in each iteration
-        
+        for &cell_index in minority_cluster_filtered.iter() {
+            minority_cluster_set.insert(cell_index);
+        }
 
         //wanna wtite to file for each iteration similar to above
         let mut writer = Writer::from_path(format!("output_iteration_{}.csv", iteration_count)).unwrap();
@@ -144,13 +148,12 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
             writer.write_record(&record).unwrap();
         }
 
-        // Prepare for next iteration or break loop
+
         normalized_log_likelihoods = new_normalized_log_likelihoods;
         majority_cluster = majority_cluster_filtered;
 
 
 
-        // if minority is less than 3 break
         if iteration_count > 8 {
             break;
         }
@@ -159,7 +162,132 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
     }
 
 
+
+
+    // calculating mean, variance and std_dev of the likelihoods of majority cluster 
+    let mut majority_likelihoods: Vec<f32> = Vec::new();
+    for i in majority_cluster.iter() {
+        majority_likelihoods.push(normalized_log_likelihoods[*i]);
+    }
+    let (majority_mean, majority_variance, majority_std_dev) = distribution(majority_likelihoods);
+
+
+    let mut minority_likelihoods: Vec<f32> = Vec::new();
+    for i in minority_cluster_set.iter() {
+        minority_likelihoods.push(normalized_log_likelihoods[*i]);
+    }
+    let (minority_mean, minority_variance, minority_std_dev) = distribution(minority_likelihoods);
+
+    println!("majority mean: {}, majority variance: {}, majority std_dev: {}", majority_mean, majority_variance, majority_std_dev);
+    println!("minority mean: {}, minority variance: {}, minority std_dev: {}", minority_mean, minority_variance, minority_std_dev);
+
+    let majority_params = (majority_mean, majority_std_dev);
+    let minority_params = (minority_mean, minority_std_dev);
+
+
+    let cluster_probabilities = calculate_probabilities(normalized_log_likelihoods.clone(), majority_params, minority_params);
+
+    for (cell_index, probs) in cluster_probabilities.iter().enumerate() {
+        let barcode = cell_data[cell_index].barcode.clone();
+        let ground_truth = cell_data[cell_index].ground_truth.clone();
+        let likelihood = normalized_log_likelihoods[cell_index];
+        let assignment = if probs[0] > probs[1] {"majority"} else {"minority"};
+        let prob1 = probs[0];
+        let prob2 = probs[1];
+        println!("{}\t{}->{}\t({},{})\tlikelihood: {}", barcode, ground_truth, assignment, prob1, prob2,likelihood);
+    }
+
+
+    // wanna create a crosstable of the ground truth and the assignments
+    let mut crosstable: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    for cell in cell_data.iter() {
+        let ground_truth = cell.ground_truth.clone();
+        let assignment = if cluster_probabilities[cell.cell_id][0] > cluster_probabilities[cell.cell_id][1] {"majority"} else {"minority"};
+        let counter = crosstable.entry(ground_truth).or_insert(HashMap::new()).entry(assignment.to_string()).or_insert(0);
+        *counter += 1;
+    }
+    print_crosstable(&crosstable);
+
+
+
 }
+
+
+
+fn print_crosstable(crosstable: &HashMap<String, HashMap<String, usize>>) {
+    // Determine unique headers for the assignments
+    let mut assignments = HashSet::new();
+    for counts in crosstable.values() {
+        for assignment in counts.keys() {
+            assignments.insert(assignment.clone());
+        }
+    }
+    let assignments: Vec<String> = assignments.into_iter().collect();
+
+    // Print table header
+    print!("{:<20}", "Ground Truth"); // Adjust the width as needed
+    for assignment in &assignments {
+        print!("{:>10}", assignment);
+    }
+    println!();
+
+    // Print each row of the table
+    for (ground_truth, counts) in crosstable {
+        print!("{:<20}", ground_truth); // Ground truth column
+        for assignment in &assignments {
+            let count = counts.get(assignment).unwrap_or(&0);
+            print!("{:>10}", count);
+        }
+        println!(); // New line at the end of each row
+    }
+}
+
+
+
+
+
+
+
+
+fn distribution(data: Vec<f32>) -> (f32, f32, f32){
+    
+    let mut mean: f32 = 0.0;
+    let mut variance: f32 = 0.0;
+    let mut std_dev: f32 = 0.0;
+
+    let n = data.len();
+
+    let mean = data.iter().sum::<f32>() / n as f32;
+
+    let sq_diff_iter = data.iter().map(|&value| {
+        let diff = value - mean;
+        diff * diff
+    });
+
+    let variance = sq_diff_iter.sum::<f32>() / (n - 1) as f32; 
+
+    let std_dev = variance.sqrt();
+    
+
+    (mean, variance, std_dev)
+}
+
+
+fn gaussian_pdf(x: f32, mean: f32, std_dev: f32) -> f32 {
+    let exponent = -((x - mean).powi(2)) / (2.0 * std_dev.powi(2));
+    (1.0 / (std_dev * (2.0 * PI).sqrt())) * exponent.exp()
+}
+
+fn calculate_probabilities(data_points: Vec<f32>, majority_params: (f32, f32), minority_params: (f32, f32)) -> Vec<[f32; 2]> {
+    data_points.iter().map(|&x| {
+        let majority_pdf = gaussian_pdf(x, majority_params.0, majority_params.1);
+        let minority_pdf = gaussian_pdf(x, minority_params.0, minority_params.1);
+
+        let total_pdf = majority_pdf + minority_pdf;
+        [majority_pdf / total_pdf, minority_pdf / total_pdf]
+    }).collect()
+}
+
 
 
 
