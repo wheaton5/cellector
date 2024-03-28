@@ -77,51 +77,87 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
     let mut alphas_betas_pairs = init_alphas_betas_pairs(loci_used,&locus_counts);
     let mut normalized_log_likelihoods: Vec<f32> = vec![0.0; cell_data.len()];
 
-    println!("loci used: {}", loci_used);
-    println!("cell data: {:?}", cell_data.len());
-    println!("coefficients: {:?}", coefficients.len());
-    println!("locus counts: {:?}", locus_counts.len());
+    // wanna make an stack that willhold new minorities in each iteration which is just cell indices
+    let mut all_minorities: Vec<usize> = Vec::new();
 
-    normalized_log_likelihoods = calculate_normalized_log_likelihoods(&locus_counts, &coefficients, alphas_betas_pairs, &cell_data);
-    // let (minority_cluster, majority_cluster) = outlier_detector(&normalized_log_likelihoods, &Params);
+    // println!("loci used: {}", loci_used);
+    // println!("cell data: {:?}", cell_data.len());
+    // println!("coefficients: {:?}", coefficients.len());
+    // println!("locus counts: {:?}", locus_counts.len());
+    println!("\n\ncellector started...");
 
-    print_special_floats(&normalized_log_likelihoods);
-    println!("normalized log likelihoods: {:?}", normalized_log_likelihoods.len());
+    normalized_log_likelihoods = calculate_normalized_log_likelihoods(&locus_counts, &coefficients, alphas_betas_pairs.clone(), &cell_data);
+    let (mut minority_cluster, mut majority_cluster) = iqr_detector(&normalized_log_likelihoods);
+    all_minorities.append(&mut minority_cluster);
+    let mut writer = Writer::from_path("output_iteration_1.csv").unwrap();
+    writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
 
-    ///wanna print out everything avout cell 177
-    let mut cell = 177;
-    let mut cell_loci = locus_counts[cell].clone();
-    let mut cell_coefficients = coefficients[cell].clone();
-    println!("cell: {}", cell_data[cell].barcode);
-    let (minority_cluster, majority_cluster) = iqr_detector(&normalized_log_likelihoods);
+    for (i, cell) in cell_data.iter().enumerate() {
 
-
-
-
-
-    // let mut writer = csv::Writer::from_path("output.csv").unwrap();
-    // writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
+        let record = vec![
+            cell.barcode.clone(),
+            cell.ground_truth.clone(),
+            normalized_log_likelihoods[i].to_string(),
+            locus_counts[i].len().to_string(),
+        ];
     
-    // for (i, cell) in cell_data.iter().enumerate() {
+        writer.write_record(&record).unwrap();
+    }
 
-    //     let record = vec![
-    //         cell.barcode.clone(),
-    //         cell.ground_truth.clone(),
-    //         normalized_log_likelihoods[i].to_string(),
-    //         locus_counts[i].len().to_string(),
-    //     ];
+    println!("first iteration done...\n");
+
     
-    //     // Write the combined record
-    //     writer.write_record(&record).unwrap();
-    // }
+    let mut iteration_count = 2;
+
+    loop {
+        println!("Iteration {} done...\n", iteration_count);
+
+        let new_alphas_betas_pairs = reset_alpha_beta_pairs(loci_used, &locus_counts, majority_cluster.clone());
+        
+        let new_normalized_log_likelihoods = calculate_normalized_log_likelihoods_filtered(
+            &locus_counts, 
+            &coefficients, 
+            new_alphas_betas_pairs, 
+            &cell_data, 
+            majority_cluster.clone(), 
+            normalized_log_likelihoods.clone()
+        );
+        
+        let (mut minority_cluster_filtered, mut majority_cluster_filtered) = iqr_detector(&new_normalized_log_likelihoods);
+        all_minorities.append(&mut minority_cluster_filtered);
+
+        // just wanna check if there is a new minority in each iteration
+        
+
+        //wanna wtite to file for each iteration similar to above
+        let mut writer = Writer::from_path(format!("output_iteration_{}.csv", iteration_count)).unwrap();
+        writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
+        for (i, cell) in cell_data.iter().enumerate() {
+
+            let record = vec![
+                cell.barcode.clone(),
+                cell.ground_truth.clone(),
+                new_normalized_log_likelihoods[i].to_string(),
+                locus_counts[i].len().to_string(),
+            ];
+        
+            writer.write_record(&record).unwrap();
+        }
+
+        // Prepare for next iteration or break loop
+        normalized_log_likelihoods = new_normalized_log_likelihoods;
+        majority_cluster = majority_cluster_filtered;
 
 
-   
 
+        // if minority is less than 3 break
+        if iteration_count > 8 {
+            break;
+        }
 
-    // for i in minority_cluster.iter() {
-    //     println!("{}\t{}", cell_data[*i].ground_truth, normalized_log_likelihoods[*i]);
-    // }
+        iteration_count += 1;
+    }
+
 
 }
 
@@ -129,9 +165,14 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
 
 fn calculate_normalized_log_likelihoods_filtered
     (locus_counts: &Vec<Vec<[usize; 3]>>, coefficients: &Vec<Vec<f32>>, 
-    alphas_betas_pairs: Vec<Vec<usize>>, cell_data: &Vec<CellStruct>, majority_cluster: Vec<usize>)-> Vec<f32>{
+    alphas_betas_pairs: Vec<Vec<usize>>, cell_data: &Vec<CellStruct>, majority_cluster: Vec<usize>, normalized_log_likelihoods: Vec<f32>
+)-> Vec<f32>{
 
-    let mut normalized_log_likelihoods: Vec<f32> = vec![0.0; cell_data.len()];
+    let mut updated_normalized_log_likelihoods = normalized_log_likelihoods.clone();
+    //set the majority indeces to 0 in likelihoods
+    for i in majority_cluster.iter() {
+        updated_normalized_log_likelihoods[*i] = 0.0;
+    }
 
     for (cell_index, cells_locus_counts) in locus_counts.iter().enumerate() {
 
@@ -155,13 +196,13 @@ fn calculate_normalized_log_likelihoods_filtered
 
             
             normalized_likelihood = cell_log_likelihood / cell_loci as f32;
-            normalized_log_likelihoods[cell_index] = normalized_likelihood;
+            updated_normalized_log_likelihoods[cell_index] = normalized_likelihood;
 
         }
     }
     
 
-    normalized_log_likelihoods
+    updated_normalized_log_likelihoods
 
 }
 
@@ -190,7 +231,9 @@ fn calculate_normalized_log_likelihoods
             cell_log_likelihood += cell_log_likelihood_locus;
         }
 
-        
+        if cell_log_likelihood.is_nan() || cell_log_likelihood.is_infinite() {
+            println!("cell_log_likelihood is NaN or infinite");
+        }
         normalized_likelihood = cell_log_likelihood / cell_loci as f32;
         normalized_log_likelihoods[cell_index] = normalized_likelihood;
 
@@ -255,6 +298,7 @@ fn print_special_floats(data: &Vec<f32>) {
 
 
 fn iqr_detector(data: &Vec<f32>) -> (Vec<usize>, Vec<usize>) {
+    
     let mut sorted_data = data.clone();
     // sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
     sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
@@ -264,7 +308,7 @@ fn iqr_detector(data: &Vec<f32>) -> (Vec<usize>, Vec<usize>) {
     let q3 = percentile(&sorted_data, 75.0);
     let iqr = q3 - q1;
 
-    let lower_bound = q1 - 1.5 * iqr;
+    let lower_bound = q1 - 4.0 * iqr;
 
 
     let mut minority_cluster = Vec::new();
@@ -504,7 +548,7 @@ fn load_cell_data(params: &Params, ground_truth_barcode_to_assignment: HashMap<S
         let ground_truth = ground_truth_barcode_to_assignment.get(&barcode).map_or_else(|| "N".to_string(), |s| s.clone());
         cell_structs_vec.push(CellStruct::new(*cell_id, barcode, ground_truth));
 
-        //loop over loci for this cell
+
         let mut alt_ref_counts: Vec<[usize; 3]> = Vec::new();
         let mut coefficients: Vec<f32> = Vec::new();
 
