@@ -88,7 +88,7 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
     println!("\n\ncellector started...");
 
     normalized_log_likelihoods = calculate_normalized_log_likelihoods(&locus_counts, &coefficients, alphas_betas_pairs.clone(), &cell_data);
-    let (mut minority_cluster, mut majority_cluster) = iqr_detector(&normalized_log_likelihoods);
+    let (mut minority_cluster, mut majority_cluster, minority_counts) = iqr_detector(&normalized_log_likelihoods);
 
     for &cell_index in minority_cluster.iter() {
         minority_cluster_set.insert(cell_index);
@@ -128,12 +128,11 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
             normalized_log_likelihoods.clone()
         );
         
-        let (mut minority_cluster_filtered, mut majority_cluster_filtered) = iqr_detector(&new_normalized_log_likelihoods);
+        let (mut minority_cluster_filtered, mut majority_cluster_filtered, minority_counts) = iqr_detector_filterd(&new_normalized_log_likelihoods, majority_cluster.clone());
         for &cell_index in minority_cluster_filtered.iter() {
             minority_cluster_set.insert(cell_index);
         }
 
-        //wanna wtite to file for each iteration similar to above
         let mut writer = Writer::from_path(format!("output_iteration_{}.csv", iteration_count)).unwrap();
         writer.write_record(&["barcode", "ground_truth", "likelihood", "loci"]).unwrap();
         for (i, cell) in cell_data.iter().enumerate() {
@@ -152,11 +151,15 @@ fn cellector( loci_used: usize, cell_data: Vec<CellStruct>, coefficients: Vec<Ve
         normalized_log_likelihoods = new_normalized_log_likelihoods;
         majority_cluster = majority_cluster_filtered;
 
+        // println!("minority counts: {}", minority_counts);
 
-
-        if iteration_count > 8 {
+        if minority_counts == 0 {
             break;
         }
+
+        // if iteration_count > 8 {
+        //     break;
+        // }
 
         iteration_count += 1;
     }
@@ -399,7 +402,7 @@ fn reset_alpha_beta_pairs(loci_used: usize,locus_counts: &Vec<Vec<[usize; 3]>>, 
 
 
 fn outlier_detector(data: &Vec<f32>, params: &Params) -> (Vec<usize>, Vec<usize>) {
-    let (minority, majority) = if params.outlier_detector == "iqr" {
+    let (minority, majority, minority_counts) = if params.outlier_detector == "iqr" {
         iqr_detector(data)
     } else {
         panic!("Invalid outlier detector method specified.")
@@ -424,13 +427,45 @@ fn print_special_floats(data: &Vec<f32>) {
 
 
 
-
-fn iqr_detector(data: &Vec<f32>) -> (Vec<usize>, Vec<usize>) {
+fn iqr_detector_filterd(data: &Vec<f32>, majority_cluster_filtered: Vec<usize>) -> (Vec<usize>, Vec<usize>, usize) {
     
     let mut sorted_data = data.clone();
     // sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
     sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
 
+    let mut minority_counts = 0;
+
+    let q1 = percentile(&sorted_data, 25.0);
+    let q3 = percentile(&sorted_data, 75.0);
+    let iqr = q3 - q1;
+
+    let lower_bound = q1 - 4.0 * iqr;
+
+
+    let mut minority_cluster = Vec::new();
+    let mut majority_cluster = Vec::new();
+
+    for i in majority_cluster_filtered.iter() {
+        if data[*i] < lower_bound {
+            minority_cluster.push(*i); 
+            minority_counts += 1;
+            
+        } else {
+            majority_cluster.push(*i); 
+        }
+    }
+
+    println!("minority counts:new {}", minority_counts);
+    (minority_cluster, majority_cluster, minority_counts)
+}
+
+fn iqr_detector(data: &Vec<f32>) -> (Vec<usize>, Vec<usize>, usize) {
+    
+    let mut sorted_data = data.clone();
+    // sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
+
+    let mut minority_counts = 0;
 
     let q1 = percentile(&sorted_data, 25.0);
     let q3 = percentile(&sorted_data, 75.0);
@@ -446,12 +481,15 @@ fn iqr_detector(data: &Vec<f32>) -> (Vec<usize>, Vec<usize>) {
     data.iter().enumerate().for_each(|(index, &value)| {
         if value < lower_bound {
             minority_cluster.push(index); 
+            minority_counts += 1;
+            
         } else {
             majority_cluster.push(index); 
         }
     });
 
-    (minority_cluster, majority_cluster)
+    println!("minority counts:* {}", minority_counts);
+    (minority_cluster, majority_cluster, minority_counts)
 }
 
  
