@@ -61,12 +61,6 @@ fn main() {
     let cell_barcodes = load_barcodes(&params);
 
     let (loci_used, cells, coefficients, locus_counts, i) = load_cell_data(&params, ground_truth_barcode_to_assignment.clone(), cell_barcodes.clone());
-
-
-    // let x = i.get(&10707).unwrap();
-    // println!("{:?}", x);
-    // let y = i.get(&6831).unwrap();
-    // println!("{:?}", y);
     
     cellector(loci_used, cells, coefficients, locus_counts);
 
@@ -215,7 +209,7 @@ fn posterioir_calc(loci_used: usize, cell_data: Vec<CellStruct>, coefficients: V
     let log_minority_prior = minority_prior.ln();
     let log_majority_prior = majority_prior.ln();
 
-    // wanna define a demes vec that has the f64 denom per cell
+
     let mut denoms: Vec<f64> = vec![0.0; cell_data.len()];
 
     for (cell_index, cell) in cell_data.iter().enumerate() {
@@ -264,12 +258,52 @@ fn posterioir_calc(loci_used: usize, cell_data: Vec<CellStruct>, coefficients: V
     for cell_index in 0..cell_data.len() {
         let assignment = final_assignments[cell_index].clone();
         let ground_truth = cell_data[cell_index].ground_truth.clone();
-        // wanna create a table like data strucrue that has the ground truth and the assignment and barcode
+
         barcode_ground_truth_assignment.push(vec![cell_data[cell_index].barcode.clone(), ground_truth.clone(), assignment.clone()]);
         println!("{}\t{}\t{}", cell_data[cell_index].barcode, ground_truth, assignment);
     }
 
-    let mut unique_truths: HashSet<String> = HashSet::new();
+
+
+
+
+    let mut locus_to_plot: Vec<Vec<f64>> = vec![vec![0.0; 9]; loci_used];
+    for (cell_index, cell) in cell_data.iter().enumerate() {
+
+        let cellector_assignments = final_assignments[cell_index].clone();
+        let cell_loci_counts = locus_counts[cell_index].clone();
+
+
+
+        for (inner_locus_index, locus_counts) in cell_loci_counts.iter().enumerate() {
+
+            let locus_index = locus_counts[0];
+            let ref_count = locus_counts[1];
+            let alt_count = locus_counts[2];
+
+            if cellector_assignments == "0" {
+                locus_to_plot[locus_index][0] += 1 as f64;
+                locus_to_plot[locus_index][1] += ref_count as f64;
+                locus_to_plot[locus_index][2] += alt_count as f64;
+            } else if cellector_assignments == "1" {
+                locus_to_plot[locus_index][3] += 1 as f64;
+                locus_to_plot[locus_index][4] += ref_count as f64;
+                locus_to_plot[locus_index][5] += alt_count as f64;
+            } else {
+                locus_to_plot[locus_index][6] += 1 as f64;
+                locus_to_plot[locus_index][7] += ref_count as f64;
+                locus_to_plot[locus_index][8] += alt_count as f64;
+            }
+
+        }
+
+
+    }
+
+
+    
+
+    
         
 
 }
@@ -423,11 +457,6 @@ fn calculate_normalized_log_likelihoods
         normalized_likelihood = cell_log_likelihood / cell_loci as f64;
         normalized_log_likelihoods[cell_index] = normalized_likelihood;
 
-        // wanna print log likelihoods and the cell_index of t... just first 10 cells
-        if cell_index <12{
-            // also print 
-            println!("barcode{}: {}\t{}", cell_data[cell_index].barcode, cell_log_likelihood, normalized_likelihood);
-        }
 
     }
 
@@ -469,7 +498,7 @@ fn reset_alpha_beta_pairs(loci_used: usize,locus_counts: &Vec<Vec<[usize; 3]>>, 
 fn iqr_detector_filterd(data: &Vec<f64>, majority_cluster_filtered: Vec<usize>) -> (Vec<usize>, Vec<usize>, usize) {
     
     let mut sorted_data = data.clone();
-    // sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
     sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
 
     let mut minority_counts = 0;
@@ -481,7 +510,6 @@ fn iqr_detector_filterd(data: &Vec<f64>, majority_cluster_filtered: Vec<usize>) 
     let lower_bound = q1 - 4.0 * iqr;
     let meadian = sorted_data[sorted_data.len() / 2];
     println!("median: {},IQR: {},  q1-4*iqr: {} len {}, max{}, min{}", meadian,iqr, lower_bound, sorted_data.len(), sorted_data[sorted_data.len()-1], sorted_data[0]);
-    // wanna print all cell likelihoods
 
 
     let mut minority_cluster = Vec::new();
@@ -763,8 +791,8 @@ fn load_cell_data(params: &Params, ground_truth_barcode_to_assignment: HashMap<S
 
 
     let mut cell_structs_vec: Vec<CellStruct> = Vec::new();
-    let mut cell_index_to_coefficients: Vec<Vec<f64>> = Vec::new(); // cell_id to a vec of log binomial coefficients indexed based ob locus_index of the cell data
-    let mut cell_index_to_locus_counts: Vec<Vec<[usize; 3]>> = Vec::new(); // cell_id to a vec of locus counts indexed based ob locus_index of the cell data
+    let mut cell_index_to_coefficients: Vec<Vec<f64>> = Vec::new(); 
+    let mut cell_index_to_locus_counts: Vec<Vec<[usize; 3]>> = Vec::new(); 
 
 
     let mut cell_id_to_cell_index : HashMap<usize, usize> = HashMap::new();
