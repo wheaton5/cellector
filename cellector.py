@@ -12,12 +12,12 @@ import os
 parser = argparse.ArgumentParser(description="find outlier genotype cells in single cell experiment")
 parser.add_argument("-a","--alt", required=True, help="alt.mtx from vartrix")
 parser.add_argument("-r","--ref", required=True, help="ref.mtx from vartrix")
-parser.add_argument("--min_ref", required=False, default = 10, type=int, help="minimum ref count to use loci")
-parser.add_argument("--min_alt", required=False, default = 10, type=int, help="minimum alt count to use loci")
+parser.add_argument("--min_ref", required=False, default = 4, type=int, help="minimum ref count to use loci")
+parser.add_argument("--min_alt", required=False, default = 4, type=int, help="minimum alt count to use loci")
 parser.add_argument("--barcodes", required=True, help="barcodes.tsv file")
 parser.add_argument("--ground_truth", required=False, help="cell hashing assignments to barcodes or similar, two columns first column barcode, second column ground truth assignment")
 parser.add_argument("--output_prefix", required=True, help="output prefix")
-parser.add_argument("--min_alleles_posterior", required = False, default = 10, type = int, help="I wish I could be of more help here")
+parser.add_argument("--min_alleles_posterior", required = False, default = 5, type = int, help="I wish I could be of more help here")
 parser.add_argument("--minority_prior", required = False, default = 0.1, type=float, help="prior used for posterior probability calculation in cell assignment, this could be the % you expect or just .5 to let the data speak for itself")
 parser.add_argument("--assignment_threshold", required = False, default=0.999, type=float, help="posterior probability threshold for cell assignment")
 args = parser.parse_args()
@@ -167,7 +167,6 @@ while any_change:
         threshold = q1 - 4*interquartile_range
 
         print("loci normalized median=",median, " iqr=",interquartile_range, " q1-4*iqr=",threshold)        
-        print("loci normalized mean=",mean_loci_normalized, " std=",sd_loci_normalized, " 3 sigma threshold=",mean_loci_normalized-3*sd_loci_normalized)
         df = pd.read_csv(filename,sep="\t")
         graphname = filename[:-4]+".pdf"
         print(graphname)
@@ -176,13 +175,18 @@ while any_change:
 
         #threshold = mean_loci_normalized - 3*sd_loci_normalized
         removed_cells = 0
+        new_exclude = set()
         for (cell_id, log_likelihood) in cell_log_likelihoods.items():
             if log_likelihood < threshold:
                 if not(cell_id in cells_to_exclude):
                     removed_cells += 1
                     any_change = True
-                    cells_to_exclude.add(cell_id)
-        print("removed ",removed_cells," in the ",iteration," iteration")
+                new_exclude.add(cell_id)
+        recovered = cells_to_exclude - new_exclude
+        if len(recovered) > 0:
+            any_change = True
+        cells_to_exclude = new_exclude
+        print("found ",removed_cells," anomylous cells in the ",iteration," iteration. Recovered ",len(recovered), " cells back to majority")
         # lets find which loci contribute the most to exclusion
         exclusion_locus_loglikes = {} # map from locus to sum of loglikelihoods from excluded cells
         exclusion_locus_cellcounts = {}
@@ -215,7 +219,21 @@ while any_change:
                     majority_locus_refs[locus] += num_ref
         sorted_locus_loglikes = sorted(exclusion_locus_loglikes.items(), key=lambda x:x[1])
         outfile = filename[:-4]+"_locus_contribution_minority.tsv"
-        
+        locus_loglikes_per_cell = []
+        for (locus, loglike) in sorted_locus_loglikes:
+            cellcounts = exclusion_locus_cellcounts[locus]
+            if cellcounts > 0 and loglike < 0:
+                locus_loglikes_per_cell.append(loglike/cellcounts)
+        median_loglike_per_cell = np.median(locus_loglikes_per_cell)
+        print("median loglike locus per cell ", median_loglike_per_cell)
+        for (locus, loglike) in sorted_locus_loglikes:
+            cellcounts = exclusion_locus_cellcounts[locus]
+            if cellcounts > 0:
+                if loglike/cellcounts < 100*median_loglike_per_cell:
+                    loci_used.remove(locus)
+                    anychange = True
+                    print("removed locus ",locus," due to extreme outlier for log likelihood per cell ", loglike/cellcounts, " vs median ",median_loglike_per_cell)
+
         log_likelihoods_for_post = {} # map from cell to [log_likelihood_minority, log_likelihood_majority]
         with open(outfile,'w') as out:
             out.write("\t".join(["locus","log_likelihood_minority","minority_cellcount", "log_likelihood_minority_per_cell","minority_alt","minority_ref","majority_alt","majority_ref","minority_af","majority_af"])+"\n")
@@ -245,14 +263,15 @@ while any_change:
                         num_alt = cell_locus_counts[1]
                         num_ref = cell_locus_counts[0]
                         # betabinom.logpmf(num_alt, total_alleles, alpha, beta)
+                        excluded_fraction = len(cells_to_exclude)/len(cell_data)
                         if num_alt + num_ref > 0:
                             cell_log_likelihoods_for_post[0] += betabinom.logpmf(num_alt, num_alt + num_ref, minority_alt + 1, minority_ref + 1)
-                            cell_log_likelihoods_for_post[1] += betabinom.logpmf(num_alt, num_alt + num_ref, majority_alt + 1, majority_ref + 1)
+                            cell_log_likelihoods_for_post[1] += betabinom.logpmf(num_alt, num_alt + num_ref, majority_alt*excluded_fraction + 1, majority_ref*excluded_fraction + 1)
                             #print(num_alt, num_ref, minority_alt, minority_ref, majority_alt, majority_ref, betabinom.logpmf(num_alt, num_alt + num_ref, minority_alt + 1, minority_ref + 1), betabinom.logpmf(num_alt, num_alt + num_ref, majority_alt + 1, majority_ref + 1))
             
                 out.write("\t".join([str(locus), str(loglike), str(exclusion_locus_cellcounts[locus]), str(loglikepercell),str(minority_alt),str(minority_ref),str(majority_alt),str(majority_ref),str(minority_af),str(majority_af)])+"\n")
             
-        priors = [args.minority_prior, 1-args.minority_prior]
+        priors = [len(cells_to_exclude)/len(cell_data), 1-len(cells_to_exclude)/len(cell_data)]
         log_priors = np.log(priors)
         for cell_id in cell_data.keys():
             cell_log_likelihoods_for_post = log_likelihoods_for_post[cell_id]
