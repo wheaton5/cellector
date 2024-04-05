@@ -18,13 +18,21 @@ parser.add_argument("--barcodes", required=True, help="barcodes.tsv file")
 parser.add_argument("--ground_truth", required=False, help="cell hashing assignments to barcodes or similar, two columns first column barcode, second column ground truth assignment")
 parser.add_argument("--output_prefix", required=True, help="output prefix")
 parser.add_argument("--min_alleles_posterior", required = False, default = 5, type = int, help="I wish I could be of more help here")
-parser.add_argument("--minority_prior", required = False, default = 0.1, type=float, help="prior used for posterior probability calculation in cell assignment, this could be the % you expect or just .5 to let the data speak for itself")
+#parser.add_argument("--minority_prior", required = False, default = 0.1, type=float, help="prior used for posterior probability calculation in cell assignment, this could be the % you expect or just .5 to let the data speak for itself")
 parser.add_argument("--assignment_threshold", required = False, default=0.999, type=float, help="posterior probability threshold for cell assignment")
 args = parser.parse_args()
 if os.path.isdir(args.output_prefix):
     print("restarting pipeline in existing directory? not implemented yet " + args.output_prefix)
 else:
     subprocess.check_call(["mkdir", "-p", args.output_prefix])
+
+def expected_log_betabinom(n, alpha, beta):
+    return scipy.special.logsumexp([2*betabinom.logpmf(k, n, alpha, beta) for k in range(n+1)])
+
+def log_subtract(y, x):
+  if(x <= y):
+    return 0
+  return np.log(np.exp(x) - np.exp(y))#x + np.log(-np.exp(y-x))
 
 barcode_assignment = {} # map from barcode to assignment
 cell_id_assignment = {}
@@ -102,15 +110,14 @@ while any_change:
     any_change = False
     cell_log_likelihoods = {} # map from cell id to [log_likelihood, #loci_used, #alleles_used]
     loci_normalized = []
-    alleles_normalized = []
     loci_cell_likelihoods = {} # map from locus to cell to likelihood
-    beta_alpha = {}
-    for locus in loci_used:
+    beta_alpha = {} # map from locus to [beta, alpha]
+    for locus in loci_used: # calculate beta and alpha for each locus
         locus_counts = loci_counts[locus]
         alpha = locus_counts[1] + 1 # bayes prior alpha 1 and beta 1
         beta = locus_counts[0] + 1
         beta_alpha[locus] = [beta, alpha]
-    for cell_id in cells_to_exclude:
+    for cell_id in cells_to_exclude: # remove ref and alt alleles from beta and alpha if cell is outlier/minority
         cell_counts = cell_data[cell_id]
         for locus in cell_counts.keys():
             if locus in loci_used:
@@ -122,9 +129,10 @@ while any_change:
                  
     filename = args.output_prefix+"/iteration_"+str(iteration)+".tsv"
     with open(filename, 'w') as out:
-        out.write("\t".join(["cell_idx","barcode","assignment","log_likelihood","num_loci_used","num_alleles_used","neg_log_likelihood_loci_normalized","neg_log_likelihood_alleles_normalized"])+"\n")
-        for cell_id in cell_data.keys():
+        out.write("\t".join(["cell_idx","barcode","assignment","log_likelihood","num_loci_used","num_alleles_used","neg_log_likelihood_loci_normalized","neg_log_likelihood_alleles_normalized","expected_log_likelihood"])+"\n")
+        for cell_id in cell_data.keys(): # go through cells to calculate likelihood of each
             log_likelihood = 0
+            expected_log_likelihood = 0
             num_loci_used = 0
             num_alleles_used = 0
             cell_counts = cell_data[cell_id]
@@ -140,6 +148,8 @@ while any_change:
                     #dist = betabinom(total_alleles, alpha, beta)
                     logpmf = betabinom.logpmf(num_alt, total_alleles, alpha, beta)
                     log_likelihood += logpmf
+                    expected_logpmf = expected_log_betabinom(total_alleles, alpha, beta)
+                    expected_log_likelihood += expected_logpmf
                     cell_likelihood = loci_cell_likelihoods.setdefault(locus, {})
                     cell_likelihood[cell_id] = logpmf
             if num_loci_used > 0:
@@ -149,15 +159,13 @@ while any_change:
             assignment = "na"
             if cell_id in cell_id_assignment:
                 assignment = cell_id_assignment[cell_id]
-            if num_loci_used > 0 and num_alleles_used > 0:
+            if num_loci_used > 0 and num_alleles_used > 0 and expected_log_likelihood != 0:
                 loci_normalized.append(log_likelihood / num_loci_used)
-                alleles_normalized.append(log_likelihood / num_alleles_used)
-                out.write("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), str(-log_likelihood/num_loci_used), str(-log_likelihood/num_alleles_used)])+"\n")
+                #print(assignment, log_likelihood, expected_log_likelihood, log_subtract(log_likelihood, expected_log_likelihood))
+                
+                out.write("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), str(-log_likelihood/num_loci_used), str(-log_likelihood/num_alleles_used), str(expected_log_likelihood)])+"\n")
             else:
-                out.write("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), "0", "0"])+"\n")
-
-        mean_loci_normalized = np.mean(loci_normalized)
-        sd_loci_normalized = np.std(loci_normalized)
+                out.write("\t".join([str(cell_id),str(cell_id_to_barcode[cell_id]), assignment, str(log_likelihood), str(num_loci_used), str(num_alleles_used), "0", "0", str(log_likelihood-expected_log_likelihood)])+"\n")
 
         sorted_loci_norm = sorted(loci_normalized)
         median = sorted_loci_norm[len(loci_normalized)//2]
@@ -169,11 +177,10 @@ while any_change:
         print("loci normalized median=",median, " iqr=",interquartile_range, " q1-4*iqr=",threshold)        
         df = pd.read_csv(filename,sep="\t")
         graphname = filename[:-4]+".pdf"
-        print(graphname)
         graph = ggplot(df)+geom_point(aes(x="cell_idx",y="neg_log_likelihood_loci_normalized",size="num_loci_used",color="assignment"))+geom_abline(intercept=-threshold,slope=0)
         save_as_pdf_pages([graph],filename=graphname)
 
-        #threshold = mean_loci_normalized - 3*sd_loci_normalized
+        # calculate new removed cells and if any cells were added back to majority
         removed_cells = 0
         new_exclude = set()
         for (cell_id, log_likelihood) in cell_log_likelihoods.items():
@@ -182,11 +189,11 @@ while any_change:
                     removed_cells += 1
                     any_change = True
                 new_exclude.add(cell_id)
-        recovered = cells_to_exclude - new_exclude
+        recovered = cells_to_exclude - new_exclude # set subtraction
         if len(recovered) > 0:
             any_change = True
         cells_to_exclude = new_exclude
-        print("found ",removed_cells," anomylous cells in the ",iteration," iteration. Recovered ",len(recovered), " cells back to majority")
+        print("found ",removed_cells," anomylous cells in iteration ",iteration,". Recovered ",len(recovered), " cells back to majority")
         # lets find which loci contribute the most to exclusion
         exclusion_locus_loglikes = {} # map from locus to sum of loglikelihoods from excluded cells
         exclusion_locus_cellcounts = {}
@@ -217,6 +224,9 @@ while any_change:
                 else:
                     majority_locus_alts[locus] += num_alt
                     majority_locus_refs[locus] += num_ref
+
+        # so some loci contribute like 1000x more to log likelihood for some cells than others.
+        # these are bad loci and should be removed. 
         sorted_locus_loglikes = sorted(exclusion_locus_loglikes.items(), key=lambda x:x[1])
         outfile = filename[:-4]+"_locus_contribution_minority.tsv"
         locus_loglikes_per_cell = []
@@ -229,11 +239,12 @@ while any_change:
         for (locus, loglike) in sorted_locus_loglikes:
             cellcounts = exclusion_locus_cellcounts[locus]
             if cellcounts > 0:
-                if loglike/cellcounts < 100*median_loglike_per_cell:
+                if loglike/cellcounts < 100*median_loglike_per_cell: # removing loci that contribute > 100x the median log likelihood per cell TODO dont hard code values, make this a parameter
                     loci_used.remove(locus)
                     anychange = True
                     print("removed locus ",locus," due to extreme outlier for log likelihood per cell ", loglike/cellcounts, " vs median ",median_loglike_per_cell)
 
+        # Calculate posteriors: in order to do this, we need distributions for excluded and included then we can use bayes
         log_likelihoods_for_post = {} # map from cell to [log_likelihood_minority, log_likelihood_majority]
         with open(outfile,'w') as out:
             out.write("\t".join(["locus","log_likelihood_minority","minority_cellcount", "log_likelihood_minority_per_cell","minority_alt","minority_ref","majority_alt","majority_ref","minority_af","majority_af"])+"\n")
@@ -262,10 +273,12 @@ while any_change:
                             continue
                         num_alt = cell_locus_counts[1]
                         num_ref = cell_locus_counts[0]
-                        # betabinom.logpmf(num_alt, total_alleles, alpha, beta)
+                        # use excluded fraction as prior for minority distribution
                         excluded_fraction = len(cells_to_exclude)/len(cell_data)
                         if num_alt + num_ref > 0:
                             cell_log_likelihoods_for_post[0] += betabinom.logpmf(num_alt, num_alt + num_ref, minority_alt + 1, minority_ref + 1)
+                            # open question: should I scale alpha and beta for majority distribution down to make a smoother distribution to 
+                            # compete on more equal grounds with the minority distribution? 
                             cell_log_likelihoods_for_post[1] += betabinom.logpmf(num_alt, num_alt + num_ref, majority_alt*excluded_fraction + 1, majority_ref*excluded_fraction + 1)
                             #print(num_alt, num_ref, minority_alt, minority_ref, majority_alt, majority_ref, betabinom.logpmf(num_alt, num_alt + num_ref, minority_alt + 1, minority_ref + 1), betabinom.logpmf(num_alt, num_alt + num_ref, majority_alt + 1, majority_ref + 1))
             
@@ -283,9 +296,9 @@ while any_change:
             for i in range(2):
                 posts.append(marginals[i] - denom)
             cell_posteriors[cell_id] = np.exp(posts)
-            
-                
         iteration += 1
+        # end while any_change: lol
+
 assignment_gt_counts = {} # map from cellector assignment to gt assignment to counts
 gts = set()
 gt_counts = {}
