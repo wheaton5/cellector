@@ -69,7 +69,8 @@ pub fn load_ground_truth(params: &Params, barcode_to_cell_id: &HashMap<String, u
 }
 
 pub fn load_cell_data(params: &Params, cell_id_to_barcode: &Vec<String>, cell_id_to_assignment: &Vec<String>) ->
-    (Vec<bool>, Vec<CellData>, Vec<[f64; 2]>) { // loci_used, vec of celldata, locus_counts (vec indexed by locus of [refcount, altcount])
+    (Vec<bool>, Vec<CellData>, Vec<[f64; 2]>, Vec<Vec<f64>>) { 
+    // loci_used, vec of celldata, locus_counts (vec indexed by locus of [refcount, altcount])
     // 2 pass on mtx file. First to get loci_used then to get the cell data only for loci_used
     let (num_loci_used, loci_used, locus_to_used_index) = get_loci_used(params);
     let (mut alt_reader, mut ref_reader) = (reader(&params.alt_mtx), reader(&params.ref_mtx));
@@ -109,7 +110,7 @@ pub fn load_cell_data(params: &Params, cell_id_to_barcode: &Vec<String>, cell_id
     for _locus in 0..num_loci_used {
         loci_used.push(true);
     }
-    return (loci_used, cell_data, locus_counts);
+    return (loci_used, cell_data, locus_counts, precomputed_log_binomial_coefficients);
 }
 
 struct VartrixDatum {

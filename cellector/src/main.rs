@@ -4,13 +4,10 @@ extern crate hashbrown;
 extern crate statrs;
 extern crate flate2;
 extern crate itertools;
-extern crate logaddexp;
 
 mod stats;
 mod load_data;
 use load_data::CellData;
-
-use logaddexp::LogAddExp;
 
 use clap::App;
 use std::fs::File;
@@ -27,21 +24,21 @@ fn main() {
     load_data::create_output_dir(&params);
     let (cell_id_to_barcode, barcode_to_cell_id) = load_data::load_barcodes(&params);
     let cell_id_to_assignment = load_data::load_ground_truth(&params, &barcode_to_cell_id);
-    let (mut loci_used, cell_data, locus_counts) = load_data::load_cell_data(&params, &cell_id_to_barcode, &cell_id_to_assignment);
-    
-    cellector(&params, &mut loci_used, &cell_data, &locus_counts);
+    let (mut loci_used, cell_data, locus_counts, precomputed_log_binomial_coefficients) = 
+        load_data::load_cell_data(&params, &cell_id_to_barcode, &cell_id_to_assignment);
+    cellector(&params, &mut loci_used, &cell_data, &locus_counts, &precomputed_log_binomial_coefficients);
 }
 
-fn cellector(params: &Params, loci_used: &mut Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>) {
+fn cellector(params: &Params, loci_used: &mut Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) {
     let mut excluded_cells: HashSet<usize> = HashSet::new();
     let mut any_change;
     let mut iteration = 0;
     loop {
-        (any_change, excluded_cells) = compute_new_excluded(params, loci_used, cell_data, locus_counts, &excluded_cells, iteration);
+        (any_change, excluded_cells) = compute_new_excluded(params, loci_used, cell_data, locus_counts, &excluded_cells, iteration, precomputed_log_binomial_coefficients);
         iteration += 1;
         if !any_change { break; }
     }
-    let posteriors = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells);
+    let posteriors = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells, precomputed_log_binomial_coefficients);
     output_final_assignments(params, cell_data, &posteriors, &excluded_cells);
 }
 
@@ -78,10 +75,14 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
 }
 
 fn pretty_print(params: &Params, assignment_gt_counts: HashMap<String, HashMap<String, usize>>, gt_counts: HashMap<String, usize>) {
-    
+    let mut count_vec: Vec<(&String, &usize)> = gt_counts.iter().collect();
+    count_vec.sort_by(|a, b| b.1.cmp(a.1));    
+    for (gt, count) in & count_vec {
+        println!("{},{}", gt, count);
+    }
 } 
 
-fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64;2]>, excluded_cells: &HashSet<usize>) -> Vec<f64> {
+fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64;2]>, excluded_cells: &HashSet<usize>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> Vec<f64> {
     let mut posteriors: Vec<f64> = Vec::new();
     let mut included_cells: HashSet<usize> = HashSet::new();
     for cell_id in 0..cell_data.len() {
@@ -97,13 +98,13 @@ fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<
         alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)*minority_fraction + 1.0;
     }
     let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
-    let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist);
-    let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist);
+    let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist, precomputed_log_binomial_coefficients);
+    let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist, precomputed_log_binomial_coefficients);
     let log_prior_minority: f64 = minority_fraction.ln();
     let log_prior_majority: f64 = (1.0 - minority_fraction).ln();
     for cell_id in 0..cell_data.len() {
         let log_numerator = log_prior_minority + minority_dist_likelihoods.log_likelihoods[cell_id];
-        let log_denominator = log_numerator.ln_add_exp(log_prior_majority + majority_dist_likelihoods.log_likelihoods[cell_id]);
+        let log_denominator = stats::logsumexp(log_numerator, log_prior_majority + majority_dist_likelihoods.log_likelihoods[cell_id]);
         let log_minority_posterior = log_numerator - log_denominator;
         let posterior = log_minority_posterior.exp();
         posteriors.push(posterior);
@@ -137,11 +138,11 @@ fn get_loci_used_for_posterior_calc(params: &Params, loci_used: &Vec<bool>, cell
     return loci_used_for_posteriors;
 }
 
-fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, excluded_cells: &HashSet<usize>, iteration: usize) -> (bool, HashSet<usize>) {
+fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, excluded_cells: &HashSet<usize>, iteration: usize, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> (bool, HashSet<usize>) {
     let alpha_betas = init_alpha_betas(locus_counts, excluded_cells, cell_data);
     let mut new_excluded: HashSet<usize> = HashSet::new();
 
-    let cell_log_likelihood_data: CellLogLikelihoodData = get_cell_log_likelihoods(loci_used, cell_data, &alpha_betas);
+    let cell_log_likelihood_data: CellLogLikelihoodData = get_cell_log_likelihoods(loci_used, cell_data, &alpha_betas, precomputed_log_binomial_coefficients);
     let mut normalized_log_likelihoods: Vec<f64> = Vec::new();
     for i in 0..cell_data.len() {
         normalized_log_likelihoods.push(cell_log_likelihood_data.log_likelihoods[i] / cell_log_likelihood_data.loci_used_per_cell[i]);
@@ -177,7 +178,7 @@ fn output_iteration_tsv(params: &Params, cell_data: &Vec<CellData>, cell_log_lik
         let line = format!("{}\t{}\t{}\t{}\t{}\t{}\n", cell.cell_id, cell.barcode, cell.assignment, cell_log_likelihood_data.log_likelihoods[cell_id], cell_log_likelihood_data.expected_log_likelihoods[cell_id], cell_log_likelihood_data.loci_used_per_cell[cell_id]);
         writer.write_all(line.as_bytes()).expect("could not write to iteration tsv file"); 
     }
-    let filename = format!("{}.iteration_{}_threshold.tsv",params.output_directory, iteration);
+    let filename = format!("{}/iteration_{}_threshold.tsv",params.output_directory, iteration);
     let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
     let mut writer = BufWriter::new(filehandle);
     let line = format!("{}",threshold);
@@ -190,7 +191,7 @@ struct CellLogLikelihoodData {
     expected_log_likelihoods: Vec<f64>,
 }
 
-fn get_cell_log_likelihoods(loci_used: &Vec<bool>, cell_data: &Vec<CellData>, alpha_betas: &Vec<AlphaBeta>) -> 
+fn get_cell_log_likelihoods(loci_used: &Vec<bool>, cell_data: &Vec<CellData>, alpha_betas: &Vec<AlphaBeta>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> 
         CellLogLikelihoodData {
     let mut cell_log_likelihoods: Vec<f64> = Vec::new();
     let mut cell_loci_used: Vec<f64> = Vec::new();
@@ -203,7 +204,7 @@ fn get_cell_log_likelihoods(loci_used: &Vec<bool>, cell_data: &Vec<CellData>, al
         for locus in &cell.cell_loci_data {
             if loci_used[locus.locus_index] {
                 log_likelihood += stats::log_beta_binomial_pmf(locus.alt_count, locus.ref_count, alpha_betas[locus.locus_index].alpha, alpha_betas[locus.locus_index].beta, locus.log_binomial_coefficient);
-                expected_log_likelihood += stats::expected_log_beta_binomial_pmf(locus.total, alpha_betas[locus.locus_index].alpha, alpha_betas[locus.locus_index].beta, locus.log_binomial_coefficient);
+                expected_log_likelihood += stats::expected_log_beta_binomial_pmf(locus.total, alpha_betas[locus.locus_index].alpha, alpha_betas[locus.locus_index].beta, precomputed_log_binomial_coefficients);
                 loci_used_for_cell += 1.0;
             }
         }
