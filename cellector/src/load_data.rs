@@ -1,12 +1,12 @@
 use flate2::read::MultiGzDecoder;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::ffi::OsStr;
 use File;
 use izip;
 use stats;
-
-use hashbrown::{HashMap, HashSet};
+use std::process::Command;
+use hashbrown::HashMap;
 use Params;
 
 pub struct CellLocusData {
@@ -23,6 +23,13 @@ pub struct CellData {
     pub barcode: String,
     pub assignment: String,
     pub cell_loci_data: Vec<CellLocusData>,
+}
+
+pub fn create_output_dir(params: &Params) {
+    Command::new("mkdir")
+        .arg(&params.output_directory)
+        .output()
+        .expect("failed to create output directory");
 }
 
 pub fn load_barcodes(params: &Params) -> (Vec<String>, HashMap<String, usize>) {

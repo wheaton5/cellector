@@ -4,18 +4,19 @@ extern crate hashbrown;
 extern crate statrs;
 extern crate flate2;
 extern crate itertools;
+extern crate logaddexp;
 
 mod stats;
 mod load_data;
 use load_data::CellData;
 
-use clap::App;
-use std::process::Command;
-use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::Path;
+use logaddexp::LogAddExp;
 
-use hashbrown::{HashMap, HashSet};
+use clap::App;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+
+use hashbrown::HashSet;
 use itertools::izip;
 
 use statrs::statistics::OrderStatistics;
@@ -23,7 +24,7 @@ use statrs::statistics::Data;
 
 fn main() {
     let params = load_params();
-    create_output_dir(&params);
+    load_data::create_output_dir(&params);
     let (cell_id_to_barcode, barcode_to_cell_id) = load_data::load_barcodes(&params);
     let cell_id_to_assignment = load_data::load_ground_truth(&params, &barcode_to_cell_id);
     let (mut loci_used, cell_data, locus_counts) = load_data::load_cell_data(&params, &cell_id_to_barcode, &cell_id_to_assignment);
@@ -31,22 +32,93 @@ fn main() {
     cellector(&params, &mut loci_used, &cell_data, &locus_counts);
 }
 
-fn create_output_dir(params: &Params) {
-    Command::new("mkdir")
-        .arg(&params.output_directory)
-        .output()
-        .expect("failed to create output directory");
-}
-
 fn cellector(params: &Params, loci_used: &mut Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>) {
     let mut excluded_cells: HashSet<usize> = HashSet::new();
+    let mut any_change;
     let mut iteration = 0;
     loop {
-        let (any_change, excluded_cells) = compute_new_excluded(params, loci_used, cell_data, locus_counts, &mut excluded_cells, iteration);
+        (any_change, excluded_cells) = compute_new_excluded(params, loci_used, cell_data, locus_counts, &excluded_cells, iteration);
         iteration += 1;
         if !any_change { break; }
     }
+    let posteriors = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells);
+    output_final_assignments(params, cell_data, &posteriors, &excluded_cells);
+    
     // output final results
+}
+
+fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posteriors: &Vec<f64>, excluded_cells: &HashSet<usize>) {
+    let filename = format!("{}/cellector_assignments.tsv",params.output_directory);
+    let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
+    let mut writer = BufWriter::new(filehandle);
+    let header = format!("barcode\tposterior_assignment\tanomally_assignment\tminority_posterior\tmajority_posterior\tground_truth_assignment\n");
+    writer.write_all(header.as_bytes()).expect("could not write to cellector assignment file");
+    for cell_id in 0..cell_data.len() {
+        let cell = &cell_data[cell_id];
+        let mut posterior_assignment = "na";
+        if posteriors[cell_id] > params.posterior_threshold {
+            posterior_assignment = "0";
+        } else if 1.0 - posteriors[cell_id] > params.posterior_threshold {
+            posterior_assignment = "1";
+        }
+        let anomally_assignment;
+        if excluded_cells.contains(&cell_id) {
+            anomally_assignment = "0";
+        } else { anomally_assignment = "1"; } // maybe do something here where we leave some unassigned if they are near the threshold?
+        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, posteriors[cell_id], 1.0 - posteriors[cell_id], cell.assignment);
+        writer.write_all(line.as_bytes()).expect("could not write to cellector assignment file");
+    }
+}
+
+fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64;2]>, excluded_cells: &HashSet<usize>) -> Vec<f64> {
+    let mut posteriors: Vec<f64> = Vec::new();
+    let mut included_cells: HashSet<usize> = HashSet::new();
+    for cell_id in 0..cell_data.len() {
+        if !excluded_cells.contains(&cell_id) {
+            included_cells.insert(cell_id);
+        }
+    }
+    let alpha_betas_majority_dist = init_alpha_betas(locus_counts, excluded_cells, cell_data);
+    let alpha_betas_minority_dist = init_alpha_betas(locus_counts, &included_cells, cell_data);
+    let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
+    let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist);
+    let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist);
+    let log_prior_minority: f64 = ((excluded_cells.len() as f64)/(cell_data.len() as f64)).ln();
+    let log_prior_majority: f64 = (((cell_data.len()-excluded_cells.len()) as f64)/(cell_data.len() as f64)).ln();
+    for cell_id in 0..cell_data.len() {
+        let log_numerator = log_prior_minority + minority_dist_likelihoods.log_likelihoods[cell_id];
+        let log_denominator = log_numerator.ln_add_exp(log_prior_majority + majority_dist_likelihoods.log_likelihoods[cell_id]);
+        let log_minority_posterior = log_numerator - log_denominator;
+        let posterior = log_minority_posterior.exp();
+        posteriors.push(posterior);
+    }
+    return posteriors;
+}
+
+fn get_loci_used_for_posterior_calc(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, excluded_cells: &HashSet<usize>, locus_counts: &Vec<[f64; 2]>) -> Vec<bool> {
+    let mut locus_counts_minority: Vec<[usize; 2]> = Vec::new();
+    let mut loci_used_for_posteriors: Vec<bool> = Vec::new();
+    for _i in 0..loci_used.len() {
+        locus_counts_minority.push([0;2]);
+    }
+    for cell_id in excluded_cells {
+        let cell = &cell_data[*cell_id];
+        for locus in &cell.cell_loci_data {
+            locus_counts_minority[locus.locus_index][0] += locus.ref_count.round() as usize;
+            locus_counts_minority[locus.locus_index][1] += locus.alt_count.round() as usize;
+        }
+    }
+    for locus_index in 0..loci_used.len() {
+        let minority_alt = locus_counts_minority[locus_index][1];
+        let minority_ref = locus_counts_minority[locus_index][0];
+        let majority_alt = locus_counts[locus_index][1].round() as usize - locus_counts_minority[locus_index][1];
+        let majority_ref = locus_counts[locus_index][0].round() as usize - locus_counts_minority[locus_index][0];
+        let min_alleles = params.min_alleles_posterior;
+        if loci_used[locus_index] && minority_alt + minority_ref >= min_alleles && majority_alt + majority_ref >= min_alleles {
+            loci_used_for_posteriors.push(true);
+        } else { loci_used_for_posteriors.push(false); }
+    }
+    return loci_used_for_posteriors;
 }
 
 fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, excluded_cells: &HashSet<usize>, iteration: usize) -> (bool, HashSet<usize>) {
@@ -159,6 +231,7 @@ pub struct Params {
     posterior_threshold: f64,
     interquartile_range_multiple: f64,
     output_directory: String,
+    min_alleles_posterior: usize,
 }
 
 fn load_params() -> Params{
@@ -180,6 +253,8 @@ fn load_params() -> Params{
     let interquartile_range_multiple = params.value_of("interquartile_range_multiple").unwrap_or("4");
     let interquartile_range_multiple = interquartile_range_multiple.to_string().parse::<f64>().unwrap();
     let output_directory = params.value_of("output_directory").unwrap().to_string();
+    let min_alleles_posterior = params.value_of("min_alleles_posterior").unwrap_or("5");
+    let min_alleles_posterior = min_alleles_posterior.to_string().parse::<usize>().unwrap();
 
     let params = Params {
         ref_mtx: ref_mtx,
@@ -191,6 +266,7 @@ fn load_params() -> Params{
         posterior_threshold: posterior_threshold,
         interquartile_range_multiple: interquartile_range_multiple,
         output_directory: output_directory,
+        min_alleles_posterior: min_alleles_posterior,
     };
     return params;
 }

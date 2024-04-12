@@ -1,7 +1,6 @@
 extern crate statrs;
-extern crate logaddexp;
 
-use self::logaddexp::LogSumExp;
+use logaddexp::LogSumExp;
 
 pub fn expected_log_beta_binomial_pmf(total_count: usize, alpha: f64, beta: f64, ln_coefficient: f64) -> f64 {
     return (0..(total_count + 1)).map(|x| log_beta_binomial_pmf(x as f64, (total_count - x) as f64, alpha, beta, ln_coefficient)).ln_sum_exp(); // do I know how this work? no. does it work? no idea.

@@ -52,3 +52,8 @@ args:
         takes_value: true
         required: false
         help: number of interquartile range multiples away from 25th percentile to make the threshold to call an outline (default 4x)
+    - min_alleles_posterior:
+        long: min_alleles_posterior
+        takes_value: true
+        required: false
+        help: minimum number of alleles for both minority distribution and majority distribution to have for a locus to be used for posterior probability calculation 
