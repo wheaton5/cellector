@@ -16,7 +16,7 @@ use clap::App;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-use hashbrown::HashSet;
+use hashbrown::{HashMap,HashSet};
 use itertools::izip;
 
 use statrs::statistics::OrderStatistics;
@@ -43,8 +43,6 @@ fn cellector(params: &Params, loci_used: &mut Vec<bool>, cell_data: &Vec<CellDat
     }
     let posteriors = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells);
     output_final_assignments(params, cell_data, &posteriors, &excluded_cells);
-    
-    // output final results
 }
 
 fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posteriors: &Vec<f64>, excluded_cells: &HashSet<usize>) {
@@ -53,6 +51,9 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
     let mut writer = BufWriter::new(filehandle);
     let header = format!("barcode\tposterior_assignment\tanomally_assignment\tminority_posterior\tmajority_posterior\tground_truth_assignment\n");
     writer.write_all(header.as_bytes()).expect("could not write to cellector assignment file");
+    let mut assignment_gt_counts: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut gts: HashSet<String> = HashSet::new();
+    let mut gt_counts: HashMap<String, usize> = HashMap::new();
     for cell_id in 0..cell_data.len() {
         let cell = &cell_data[cell_id];
         let mut posterior_assignment = "na";
@@ -61,6 +62,13 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         } else if 1.0 - posteriors[cell_id] > params.posterior_threshold {
             posterior_assignment = "1";
         }
+        let counts = assignment_gt_counts.entry(posterior_assignment.to_string()).or_insert(HashMap::new());
+        let count = counts.entry(cell.assignment.clone()).or_insert(0);
+        *count += 1;
+        let count = gt_counts.entry(cell.assignment.clone()).or_insert(0);
+        *count += 1;
+        gts.insert(cell.assignment.clone());
+        
         let anomally_assignment;
         if excluded_cells.contains(&cell_id) {
             anomally_assignment = "0";
@@ -78,13 +86,18 @@ fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<
             included_cells.insert(cell_id);
         }
     }
-    let alpha_betas_majority_dist = init_alpha_betas(locus_counts, excluded_cells, cell_data);
+    let mut alpha_betas_majority_dist = init_alpha_betas(locus_counts, excluded_cells, cell_data);
+    let minority_fraction = (excluded_cells.len() as f64)/(cell_data.len() as f64);
     let alpha_betas_minority_dist = init_alpha_betas(locus_counts, &included_cells, cell_data);
+    for locus in 0..loci_used.len() {
+        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0)*minority_fraction + 1.0;
+        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)*minority_fraction + 1.0;
+    }
     let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
     let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist);
     let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist);
-    let log_prior_minority: f64 = ((excluded_cells.len() as f64)/(cell_data.len() as f64)).ln();
-    let log_prior_majority: f64 = (((cell_data.len()-excluded_cells.len()) as f64)/(cell_data.len() as f64)).ln();
+    let log_prior_minority: f64 = minority_fraction.ln();
+    let log_prior_majority: f64 = (1.0 - minority_fraction).ln();
     for cell_id in 0..cell_data.len() {
         let log_numerator = log_prior_minority + minority_dist_likelihoods.log_likelihoods[cell_id];
         let log_denominator = log_numerator.ln_add_exp(log_prior_majority + majority_dist_likelihoods.log_likelihoods[cell_id]);
