@@ -52,7 +52,6 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
     let header = format!("barcode\tposterior_assignment\tanomally_assignment\tminority_posterior\tmajority_posterior\tground_truth_assignment\n");
     writer.write_all(header.as_bytes()).expect("could not write to cellector assignment file");
     let mut assignment_gt_counts: HashMap<String, HashMap<String, usize>> = HashMap::new();
-    let mut gts: HashSet<String> = HashSet::new();
     let mut gt_counts: HashMap<String, usize> = HashMap::new();
     for cell_id in 0..cell_data.len() {
         let cell = &cell_data[cell_id];
@@ -67,7 +66,6 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         *count += 1;
         let count = gt_counts.entry(cell.assignment.clone()).or_insert(0);
         *count += 1;
-        gts.insert(cell.assignment.clone());
         
         let anomally_assignment;
         if excluded_cells.contains(&cell_id) {
@@ -76,7 +74,12 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         let line = format!("{}\t{}\t{}\t{:.5}\t{:.5}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, posteriors[cell_id], 1.0 - posteriors[cell_id], cell.assignment);
         writer.write_all(line.as_bytes()).expect("could not write to cellector assignment file");
     }
+    pretty_print(params, assignment_gt_counts, gt_counts);
 }
+
+fn pretty_print(params: &Params, assignment_gt_counts: HashMap<String, HashMap<String, usize>>, gt_counts: HashMap<String, usize>) {
+    
+} 
 
 fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64;2]>, excluded_cells: &HashSet<usize>) -> Vec<f64> {
     let mut posteriors: Vec<f64> = Vec::new();
@@ -263,7 +266,7 @@ fn load_params() -> Params{
     };
     let posterior_threshold = params.value_of("posterior_threshold").unwrap_or("0.999");
     let posterior_threshold = posterior_threshold.to_string().parse::<f64>().unwrap();
-    let interquartile_range_multiple = params.value_of("interquartile_range_multiple").unwrap_or("4");
+    let interquartile_range_multiple = params.value_of("interquartile_range_multiple").unwrap_or("5");
     let interquartile_range_multiple = interquartile_range_multiple.to_string().parse::<f64>().unwrap();
     let output_directory = params.value_of("output_directory").unwrap().to_string();
     let min_alleles_posterior = params.value_of("min_alleles_posterior").unwrap_or("5");
