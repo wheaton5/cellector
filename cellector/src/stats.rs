@@ -24,7 +24,7 @@ pub fn precompute_log_binomial_coefficients(max_n: usize) -> Vec<Vec<f64>> {
     let mut log_binomial_coefficients: Vec<Vec<f64>> = Vec::new();
     for n in 0..(max_n+1) {
         let mut k_log_binomial_coefficients: Vec<f64> = Vec::new();
-        for k in 0..n {
+        for k in 0..(n+1) {
             k_log_binomial_coefficients.push(statrs::function::factorial::ln_binomial(n as u64, k as u64) as f64);
         }
         log_binomial_coefficients.push(k_log_binomial_coefficients);

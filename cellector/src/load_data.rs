@@ -143,6 +143,7 @@ fn consume_mtx_header(alt_reader: &mut Box<dyn BufRead>, ref_reader: &mut Box<dy
     let mut total_cells = 0;
     for x in 0..3 {
         alt_reader.read_line(&mut line).expect("cannot read line from alt matrix market file");
+        line.clear();
         ref_reader.read_line(&mut line).expect("cannot read line from ref matrix market file");
         if x == 2 {
             let toks: Vec<&str> = line.split_whitespace().collect();

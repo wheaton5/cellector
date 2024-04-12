@@ -65,7 +65,7 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         if excluded_cells.contains(&cell_id) {
             anomally_assignment = "0";
         } else { anomally_assignment = "1"; } // maybe do something here where we leave some unassigned if they are near the threshold?
-        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, posteriors[cell_id], 1.0 - posteriors[cell_id], cell.assignment);
+        let line = format!("{}\t{}\t{}\t{:.5}\t{:.5}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, posteriors[cell_id], 1.0 - posteriors[cell_id], cell.assignment);
         writer.write_all(line.as_bytes()).expect("could not write to cellector assignment file");
     }
 }
