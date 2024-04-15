@@ -51,7 +51,7 @@ args:
         long: interquartile_range_multiple
         takes_value: true
         required: false
-        help: number of interquartile range multiples away from 25th percentile to make the threshold to call an outline (default 4x)
+        help: number of interquartile range multiples away from 25th percentile to make the threshold to call an outline
     - min_alleles_posterior:
         long: min_alleles_posterior
         takes_value: true

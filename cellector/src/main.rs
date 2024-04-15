@@ -52,7 +52,7 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
     let mut gt_counts: HashMap<String, usize> = HashMap::new();
     for cell_id in 0..cell_data.len() {
         let cell = &cell_data[cell_id];
-        let mut posterior_assignment = "na";
+        let mut posterior_assignment = "unassigned";
         if posteriors[cell_id] > params.posterior_threshold {
             posterior_assignment = "0";
         } else if 1.0 - posteriors[cell_id] > params.posterior_threshold {
@@ -77,9 +77,54 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
 fn pretty_print(params: &Params, assignment_gt_counts: HashMap<String, HashMap<String, usize>>, gt_counts: HashMap<String, usize>) {
     let mut count_vec: Vec<(&String, &usize)> = gt_counts.iter().collect();
     count_vec.sort_by(|a, b| b.1.cmp(a.1));    
+    let mut string_build: String = String::new();
+    let first_header = "cellector assignment   ".to_string();
+    let header = "        0      1      unassigned\n".to_string();
+    let header_offset = first_header.len();
+    string_build.push_str(&first_header);
+    string_build.push_str(&header);
+    let mut xoffset = 3;
+    xoffset = xoffset.max(first_header.len()-2);
+    //print("cell hashing"+" "*(xoffset-len("cell hashing")) + "|"+"-"*(len(header)+4)+"|")
+    string_build.push_str("cell_hashing");
+    for _i in 0..(xoffset.checked_sub(11).unwrap_or(0)) { string_build.push_str(" "); }
+    string_build.push_str("|");
+    for _i in 0..(header.len() + 4) { string_build.push_str("-"); }
+    string_build.push_str("|\n");
     for (gt, count) in & count_vec {
-        println!("{},{}", gt, count);
+        xoffset = xoffset.max(gt.len() + 3);
+        let (mut count0, mut count1, mut unassigned) = (0,0,0);
+        if assignment_gt_counts.contains_key("0") {
+            let counts = assignment_gt_counts.get("0").unwrap();
+            count0 = *counts.get(&gt.to_string()).unwrap_or(&0);
+        }
+        if assignment_gt_counts.contains_key("1") {
+            let counts = assignment_gt_counts.get("1").unwrap();
+            count1 = *counts.get(&gt.to_string()).unwrap_or(&0);
+        }
+        if assignment_gt_counts.contains_key("unassigned") {
+            let counts = assignment_gt_counts.get("unassigned").unwrap();
+            unassigned = *counts.get(&gt.to_string()).unwrap_or(&0);
+        }
+        let count0 = format!("{}",count0);
+        let count1 = format!("{}",count1);
+        let unassigned = format!("{}",unassigned);
+        string_build.push_str(gt);
+        for _i in 0..(xoffset-gt.len()-1) { string_build.push_str(" "); }
+        string_build.push_str(&format!(" |  {}",count0));
+        for _i in 0..(4-count0.len()) { string_build.push_str(" "); }
+        string_build.push_str(&format!(" |  {}",count1));
+        for _i in 0..(4-count1.len()) { string_build.push_str(" "); }
+        string_build.push_str(&format!(" |  {}",unassigned));
+        for _i in 0..(12-unassigned.len()) { string_build.push_str(" "); }
+        string_build.push_str("|\n");
     }
+    //print(" "*xoffset+ "|"+"-"*(len(header)+4)+"|")
+    for _i in 0..xoffset { string_build.push_str(" "); }
+    string_build.push_str("|");
+    for _i in 0..(header.len() + 4) { string_build.push_str("-"); }
+    string_build.push_str("|\n");
+    println!("\n\n{}",string_build);
 } 
 
 fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64;2]>, excluded_cells: &HashSet<usize>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> Vec<f64> {
@@ -98,8 +143,8 @@ fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<
         alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)*minority_fraction + 1.0;
     }
     let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
-    let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist, precomputed_log_binomial_coefficients);
-    let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist, precomputed_log_binomial_coefficients);
+    let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist, excluded_cells, precomputed_log_binomial_coefficients);
+    let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist, &included_cells, precomputed_log_binomial_coefficients);
     let log_prior_minority: f64 = minority_fraction.ln();
     let log_prior_majority: f64 = (1.0 - minority_fraction).ln();
     for cell_id in 0..cell_data.len() {
@@ -142,7 +187,7 @@ fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, cell_data: &
     let alpha_betas = init_alpha_betas(locus_counts, excluded_cells, cell_data);
     let mut new_excluded: HashSet<usize> = HashSet::new();
 
-    let cell_log_likelihood_data: CellLogLikelihoodData = get_cell_log_likelihoods(loci_used, cell_data, &alpha_betas, precomputed_log_binomial_coefficients);
+    let cell_log_likelihood_data: CellLogLikelihoodData = get_cell_log_likelihoods(loci_used, cell_data, &alpha_betas, excluded_cells, precomputed_log_binomial_coefficients);
     let mut normalized_log_likelihoods: Vec<f64> = Vec::new();
     for i in 0..cell_data.len() {
         normalized_log_likelihoods.push(cell_log_likelihood_data.log_likelihoods[i] / cell_log_likelihood_data.loci_used_per_cell[i]);
@@ -189,22 +234,81 @@ struct CellLogLikelihoodData {
     log_likelihoods: Vec<f64>,
     loci_used_per_cell: Vec<f64>,
     expected_log_likelihoods: Vec<f64>,
+    locus_contributions_minority: Vec<f64>,
+    locus_contributions_majority: Vec<f64>,
+    locus_cells_minority: Vec<usize>,
+    locus_cells_majority: Vec<usize>,
+    locus_expected_contribution_minority: Vec<f64>,
+    locus_expected_contribution_majority: Vec<f64>,
+    all_pmfs: Vec<PMFData>, // for data analysis, probably will remove later
 }
 
-fn get_cell_log_likelihoods(loci_used: &Vec<bool>, cell_data: &Vec<CellData>, alpha_betas: &Vec<AlphaBeta>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> 
+struct PMFData { // this is overkill, but maybe will provide some insight
+    cell_id: usize,
+    locus_index: usize,
+    locus: usize,
+    excluded: bool,
+    log_pmf: f64,
+    alt_count: usize,
+    ref_count: usize,
+    alpha: f64,
+    beta: f64,
+    expected_log_pmf: f64,
+}
+
+fn get_cell_log_likelihoods(loci_used: &Vec<bool>, cell_data: &Vec<CellData>, alpha_betas: &Vec<AlphaBeta>, excluded_cells: &HashSet<usize>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> 
         CellLogLikelihoodData {
     let mut cell_log_likelihoods: Vec<f64> = Vec::new();
     let mut cell_loci_used: Vec<f64> = Vec::new();
     let mut cell_expected_log_likelihood: Vec<f64> = Vec::new();
+    let mut locus_contributions_minority: Vec<f64> = Vec::new();
+    let mut locus_contributions_majority: Vec<f64> = Vec::new();
+    let mut locus_cells_minority: Vec<usize> = Vec::new();
+    let mut locus_cells_majority: Vec<usize> = Vec::new();
+    let mut locus_expected_contribution_minority: Vec<f64> = Vec::new();
+    let mut locus_expected_contribution_majority: Vec<f64> = Vec::new();
+    let mut all_pmfs: Vec<PMFData> = Vec::new();
+    for _locus in 0..loci_used.len() {
+        locus_contributions_minority.push(0.0);
+        locus_contributions_majority.push(0.0);
+        locus_cells_minority.push(0);
+        locus_cells_majority.push(0);
+        locus_expected_contribution_minority.push(0.0);
+        locus_expected_contribution_majority.push(0.0);
+    }
     for cell_id in 0..cell_data.len() {
         let mut log_likelihood: f64 = 0.0;
         let mut expected_log_likelihood: f64 = 0.0;
         let mut loci_used_for_cell: f64 = 0.0;
+        let excluded: bool = excluded_cells.contains(&cell_id);
         let cell = &cell_data[cell_id];
         for locus in &cell.cell_loci_data {
             if loci_used[locus.locus_index] {
-                log_likelihood += stats::log_beta_binomial_pmf(locus.alt_count, locus.ref_count, alpha_betas[locus.locus_index].alpha, alpha_betas[locus.locus_index].beta, locus.log_binomial_coefficient);
-                expected_log_likelihood += stats::expected_log_beta_binomial_pmf(locus.total, alpha_betas[locus.locus_index].alpha, alpha_betas[locus.locus_index].beta, precomputed_log_binomial_coefficients);
+                let log_pmf = stats::log_beta_binomial_pmf(locus.alt_count, locus.ref_count, alpha_betas[locus.locus_index].alpha, alpha_betas[locus.locus_index].beta, locus.log_binomial_coefficient);
+                log_likelihood += log_pmf;
+                let expected_log_pmf = stats::expected_log_beta_binomial_pmf(locus.total, alpha_betas[locus.locus_index].alpha, alpha_betas[locus.locus_index].beta, precomputed_log_binomial_coefficients);
+                expected_log_likelihood += expected_log_pmf;
+                if excluded {
+                    locus_contributions_minority[locus.locus_index] += log_pmf;
+                    locus_cells_minority[locus.locus_index] += 1;
+                    locus_expected_contribution_minority[locus.locus_index] += expected_log_pmf;
+                } else {
+                    locus_contributions_majority[locus.locus_index] += log_pmf;
+                    locus_cells_majority[locus.locus_index] += 1;
+                    locus_expected_contribution_majority[locus.locus_index] += expected_log_pmf;
+                }
+                all_pmfs.push(PMFData{
+                    log_pmf: log_pmf,
+                    cell_id: cell_id,
+                    excluded: excluded,
+                    locus: locus.locus_id,
+                    locus_index: locus.locus_index,
+                    alt_count: locus.alt_count as usize,
+                    ref_count: locus.ref_count as usize,
+                    alpha: alpha_betas[locus.locus_index].alpha,
+                    beta: alpha_betas[locus.locus_index].beta,
+                    expected_log_pmf: expected_log_pmf,
+                });
                 loci_used_for_cell += 1.0;
             }
         }
@@ -215,7 +319,16 @@ fn get_cell_log_likelihoods(loci_used: &Vec<bool>, cell_data: &Vec<CellData>, al
     return CellLogLikelihoodData{
         log_likelihoods: cell_log_likelihoods, 
         loci_used_per_cell: cell_loci_used,
-        expected_log_likelihoods: cell_expected_log_likelihood};
+        expected_log_likelihoods: cell_expected_log_likelihood,
+        locus_contributions_minority: locus_contributions_minority,
+        locus_contributions_majority: locus_contributions_majority,
+        locus_cells_majority: locus_cells_majority,
+        locus_cells_minority: locus_cells_minority,
+        all_pmfs: all_pmfs,
+        locus_expected_contribution_minority: locus_expected_contribution_minority,
+        locus_expected_contribution_majority: locus_expected_contribution_majority,
+    };
+        
 }
 
 struct AlphaBeta {
@@ -272,6 +385,7 @@ fn load_params() -> Params{
     let output_directory = params.value_of("output_directory").unwrap().to_string();
     let min_alleles_posterior = params.value_of("min_alleles_posterior").unwrap_or("5");
     let min_alleles_posterior = min_alleles_posterior.to_string().parse::<usize>().unwrap();
+    println!("{}", interquartile_range_multiple);
 
     let params = Params {
         ref_mtx: ref_mtx,
