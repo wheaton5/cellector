@@ -69,7 +69,7 @@ pub fn load_ground_truth(params: &Params, barcode_to_cell_id: &HashMap<String, u
 }
 
 pub fn load_cell_data(params: &Params, cell_id_to_barcode: &Vec<String>, cell_id_to_assignment: &Vec<String>) ->
-    (Vec<bool>, Vec<CellData>, Vec<[f64; 2]>, Vec<Vec<f64>>) { 
+    (Vec<bool>, Vec<usize>, Vec<CellData>, Vec<[f64; 2]>, Vec<Vec<f64>>) { 
     // loci_used, vec of celldata, locus_counts (vec indexed by locus of [refcount, altcount])
     // 2 pass on mtx file. First to get loci_used then to get the cell data only for loci_used
     let (num_loci_used, loci_used, locus_to_used_index) = get_loci_used(params);
@@ -78,6 +78,10 @@ pub fn load_cell_data(params: &Params, cell_id_to_barcode: &Vec<String>, cell_id
     let mut cell_data = init_cell_data(total_cells, cell_id_to_barcode, cell_id_to_assignment);
     let mut locus_counts: Vec<[f64; 2]> = Vec::new();
     for _i in 0..num_loci_used { locus_counts.push([0.0;2]); }
+    let mut locus_ids: Vec<usize> = Vec::new();
+    for locus_id in 0..loci_used.len() {
+        if loci_used[locus_id] { locus_ids.push(locus_id); }
+    }
     // precompute some log_binomial_coefficients
     let max_n = 100;
     let precomputed_log_binomial_coefficients: Vec<Vec<f64>> = stats::precompute_log_binomial_coefficients(max_n);
@@ -110,7 +114,7 @@ pub fn load_cell_data(params: &Params, cell_id_to_barcode: &Vec<String>, cell_id
     for _locus in 0..num_loci_used {
         loci_used.push(true);
     }
-    return (loci_used, cell_data, locus_counts, precomputed_log_binomial_coefficients);
+    return (loci_used, locus_ids, cell_data, locus_counts, precomputed_log_binomial_coefficients);
 }
 
 struct VartrixDatum {
