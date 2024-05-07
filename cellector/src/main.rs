@@ -139,8 +139,8 @@ fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<
     let minority_fraction = (excluded_cells.len() as f64)/(cell_data.len() as f64);
     let alpha_betas_minority_dist = init_alpha_betas(locus_counts, &included_cells, cell_data);
     for locus in 0..loci_used.len() {
-        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0)*minority_fraction + 1.0;
-        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)*minority_fraction + 1.0;
+        alpha_betas_majority_dist[locus].alpha = 1.0 + (alpha_betas_majority_dist[locus].alpha - 1.0);//*minority_fraction;
+        alpha_betas_majority_dist[locus].beta = 1.0 + (alpha_betas_majority_dist[locus].beta - 1.0);//*minority_fraction;
     }
     let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
     let all_pmfs_minority_dist = get_all_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist, excluded_cells, precomputed_log_binomial_coefficients);
@@ -195,7 +195,12 @@ fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, cell_data: &
     
     let mut normalized_log_likelihoods: Vec<f64> = Vec::new();
     for i in 0..cell_data.len() {
-        normalized_log_likelihoods.push(cell_log_likelihood_data.log_likelihoods[i] / (cell_log_likelihood_data.loci_used_per_cell[i] as f64));
+        if cell_log_likelihood_data.loci_used_per_cell[i] > 0 {
+            normalized_log_likelihoods.push(cell_log_likelihood_data.log_likelihoods[i] / (cell_log_likelihood_data.loci_used_per_cell[i] as f64));
+        
+            //normalized_log_likelihoods.push((cell_log_likelihood_data.log_likelihoods[i] - cell_log_likelihood_data.expected_log_likelihoods[i])/cell_log_likelihood_data.expected_variance_log_likelihoods[i].powf(0.5));
+            //normalized_log_likelihoods.push((cell_log_likelihood_data.log_likelihoods[i] - cell_log_likelihood_data.expected_log_likelihoods[i]));
+        }
     }
     let mut normalized_tmp = Data::new(normalized_log_likelihoods.clone());
     let median = normalized_tmp.median();
@@ -222,12 +227,12 @@ fn output_iteration_tsv(params: &Params, cell_data: &Vec<CellData>, cell_log_lik
     let filename = format!("{}/iteration_{}.tsv",params.output_directory, iteration);
     let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
     let mut writer = BufWriter::new(filehandle);
-    let header = format!("cell_id\tbarcode\tassignment\tlog_likelihood\texpected_log_likelihood\tnum_loci_used\n");
+    let header = format!("cell_id\tbarcode\tassignment\tlog_likelihood\texpected_log_likelihood\texpected_variance\tnum_loci_used\n");
     writer.write_all(header.as_bytes()).expect("could not write to iteration tsv file");
     for cell_id in 0..cell_data.len() {
         let cell = &cell_data[cell_id];
         assert!(cell.cell_id == cell_id, "I did something wrong, cell_id != cell_data[cell_id].cell_id");
-        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\n", cell.cell_id, cell.barcode, cell.assignment, cell_log_likelihood_data.log_likelihoods[cell_id], cell_log_likelihood_data.expected_log_likelihoods[cell_id], cell_log_likelihood_data.loci_used_per_cell[cell_id]);
+        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n", cell.cell_id, cell.barcode, cell.assignment, cell_log_likelihood_data.log_likelihoods[cell_id], cell_log_likelihood_data.expected_log_likelihoods[cell_id], cell_log_likelihood_data.expected_variance_log_likelihoods[cell_id], cell_log_likelihood_data.loci_used_per_cell[cell_id]);
         writer.write_all(line.as_bytes()).expect("could not write to iteration tsv file"); 
     }
     let filename = format!("{}/iteration_{}_threshold.tsv",params.output_directory, iteration);
@@ -302,11 +307,13 @@ pub fn argsort<T: PartialOrd>(data: &Vec<T>) -> Vec<usize> {
     indices.sort_by(|&i, &j| data[i].partial_cmp(&data[j]).unwrap());
     return indices;
 }
-    
+
+
 struct CellLogLikelihoodData { 
     log_likelihoods: Vec<f64>, // log likelihoods per locus (not yet but soon)
     loci_used_per_cell: Vec<usize>,
     expected_log_likelihoods: Vec<f64>,
+    expected_variance_log_likelihoods: Vec<f64>,
 }
 
 
@@ -332,6 +339,7 @@ struct PMFData { // this is overkill, but maybe will provide some insight
     alpha: f64,
     beta: f64,
     expected_log_pmf: f64,
+    expected_log_variance: f64,
 }
 
 fn get_locus_log_likelihoods(all_pmfs: &Vec<PMFData>, cell_data: &Vec<CellData>, loci_used: &Vec<bool>, excluded_cells: &HashSet<usize>) -> LocusLogLikelihoodData {
@@ -393,21 +401,26 @@ fn get_cell_log_likelihoods(all_pmfs: &Vec<PMFData>, cell_data: &Vec<CellData>) 
     let mut cell_log_likelihoods: Vec<f64> = Vec::new();
     let mut loci_used_per_cell: Vec<usize> = Vec::new();
     let mut expected_log_likelihoods: Vec<f64> = Vec::new();
+    let mut expected_variance_log_likelihoods: Vec<f64> = Vec::new();
     for _cell_id in 0..cell_data.len() {
         cell_log_likelihoods.push(0.0);
         loci_used_per_cell.push(0);
         expected_log_likelihoods.push(0.0);
+        expected_variance_log_likelihoods.push(0.0);
     }
 
     for pmf_data in all_pmfs {
         cell_log_likelihoods[pmf_data.cell_id] += pmf_data.log_pmf;
         loci_used_per_cell[pmf_data.cell_id] += 1;
         expected_log_likelihoods[pmf_data.cell_id] += pmf_data.expected_log_pmf;
+        expected_variance_log_likelihoods[pmf_data.cell_id] += pmf_data.expected_log_variance; // variances sum
+        // so the idea is now maybe the metric is 
     }
     return CellLogLikelihoodData{
         log_likelihoods: cell_log_likelihoods,
         loci_used_per_cell: loci_used_per_cell,
         expected_log_likelihoods: expected_log_likelihoods,
+        expected_variance_log_likelihoods: expected_variance_log_likelihoods,
     };
 }
 
@@ -431,33 +444,12 @@ fn get_all_log_likelihoods(loci_used: &Vec<bool>, cell_data: &Vec<CellData>, alp
                     ref_count: locus.ref_count as usize,
                     alpha: alpha_betas[locus.locus_index].alpha,
                     beta: alpha_betas[locus.locus_index].beta,
-                    expected_log_pmf: expected_log_pmf,
+                    expected_log_pmf: expected_log_pmf.expectation,
+                    expected_log_variance: expected_log_pmf.expectation_variance,
                 });
-                //loci_used_for_cell += 1.0;
             }
         }
-        //cell_log_likelihoods.push(log_likelihood);
-        //cell_loci_used.push(loci_used_for_cell);
-        //cell_expected_log_likelihood.push(expected_log_likelihood);
     }
-    //let cell_log_likelihood_data = CellLogLikelihoodData{
-    //    log_likelihoods: cell_log_likelihoods, 
-    //    loci_used_per_cell: cell_loci_used,
-    //    expected_log_likelihoods: cell_expected_log_likelihood,
-    //   };
-    /*
-    let locus_log_likelihood_data = LocusLogLikelihoodData{
-        locus_contributions_minority: locus_contributions_minority,
-        locus_contributions_majority: locus_contributions_majority,
-        locus_cells_majority: locus_cells_majority,
-        locus_cells_minority: locus_cells_minority,
-        all_pmfs: all_pmfs,
-        locus_expected_contribution_minority: locus_expected_contribution_minority,
-        locus_expected_contribution_majority: locus_expected_contribution_majority,
-        locus_alleles_minority: locus_alleles_minority,
-        locus_alleles_majority: locus_alleles_majority,
-    };
-    */
     return all_pmfs;
 }
 
