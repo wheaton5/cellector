@@ -26,6 +26,12 @@ args:
         takes_value: true
         required: true
         help: cell barcodes
+    - vcf:
+        long: vcf
+        short: v
+        takes_value: true
+        required: false
+        help: vcf associated with the alt.mtx and ref.mtx, only required to associated loci with variants and to get the genotypes of the minority and majority cells in a vcf output
     - min_alt:
         long: min_alt
         takes_value: true
