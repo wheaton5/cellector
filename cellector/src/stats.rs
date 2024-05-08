@@ -1,8 +1,12 @@
 extern crate statrs;
 
-pub fn expected_log_beta_binomial_pmf(total_count: usize, alpha: f64, beta: f64, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> f64 {
-    //let x = (0..(total_count + 1)).map(|k| log_beta_binomial_pmf(k as f64, (total_count - k) as f64, alpha, beta, precomputed_log_binomial_coefficients[total_count][k])).ln_sum_exp();
-    let mut log_likelihoods_squared: Vec<f64> = Vec::new();
+pub struct LogBetaBinomialExpectation{
+    pub expected_log_likelihood: f64,
+    pub expected_log_variance: f64,
+}
+
+pub fn expected_log_beta_binomial_pmf(total_count: usize, alpha: f64, beta: f64, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> LogBetaBinomialExpectation {
+    let mut log_likelihoods: Vec<f64> = Vec::new();
     for k in 0..(total_count + 1) {
         let log_binomial_coefficient;
         if total_count < precomputed_log_binomial_coefficients.len() {
@@ -10,13 +14,22 @@ pub fn expected_log_beta_binomial_pmf(total_count: usize, alpha: f64, beta: f64,
         } else {
             log_binomial_coefficient = statrs::function::factorial::ln_binomial(total_count as u64, k as u64) as f64;
         }
-        log_likelihoods_squared.push(2.0*log_beta_binomial_pmf(k as f64, (total_count - k) as f64, alpha, beta, log_binomial_coefficient));
+        log_likelihoods.push(log_beta_binomial_pmf(k as f64, (total_count - k) as f64, alpha, beta, log_binomial_coefficient));
     }
-    let mut to_return = log_likelihoods_squared[0];
+    let mut expectation = 2.0*log_likelihoods[0]; // 2.0* in log space to square it
     for k in 1..(total_count+1) {
-        to_return = logsumexp(to_return, log_likelihoods_squared[k]);
+        expectation = logsumexp(expectation, 2.0*log_likelihoods[k]); // again 2.0* in log to square
     }
-    return to_return;
+    let mut variance: f64 = 0.0; // um how do we compute in log space? or even should we?
+    // I guess this doesnt need to be in log
+    // so this should be sum_k=0 to n p(k,n|a,b)*(log(p(k,n|a,b) - E(log(D|a,b))))^2
+    for log_likelihood in log_likelihoods { 
+        variance += log_likelihood.exp() * (log_likelihood - expectation).powi(2);
+    }
+    return LogBetaBinomialExpectation{
+        expected_log_likelihood: expectation,
+        expected_log_variance: variance,
+    };
 }
 
 pub fn logsumexp(val_1: f64, val_2: f64) -> f64 {

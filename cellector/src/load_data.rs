@@ -25,6 +25,76 @@ pub struct CellData {
     pub cell_loci_data: Vec<CellLocusData>,
 }
 
+pub struct VcfLocusData {
+    pub locus_index: usize,
+    pub chrom: String,
+    pub pos: String,
+    pub ref_allele: String,
+    pub alt_allele: String,
+    pub gt: Option<String>,
+    pub ao: Option<String>,
+    pub ro: Option<String>,
+    pub af: Option<String>,
+    pub qual: String,
+}
+
+pub fn load_vcf_data(params: &Params) -> Option<Vec<VcfLocusData>> {
+    if params.vcf.is_none() {
+        return None;
+    }
+    let vcf = &params.vcf.as_ref().unwrap().to_string();
+    let mut to_return: Vec<VcfLocusData> = Vec::new();
+    let mut record_index: usize = 0;
+    let reader = reader(&vcf);
+    for line in reader.lines() {
+        let line = line.expect("Unable to read a line in the ground truth file");
+        if line.starts_with("#") { continue; }
+        let toks: Vec<&str> = line.split('\t').collect();
+        let chrom = toks[0].to_string();
+        let pos = toks[1].to_string();
+        let ref_allele = toks[3].to_string();
+        let alt_allele = toks[4].to_string();
+        let qual = toks[5].to_string();
+        let mut ao: Option<String> = None;
+        let mut ro: Option<String> = None;
+        let mut af: Option<String> = None;
+        let info: Vec<&str> = toks[7].split(';').collect();
+        for info_subfield in info {
+            let toks: Vec<&str> = info_subfield.split("=").collect();
+            match toks[0] {
+                "AO" => ao = Some(toks[1].to_string()),
+                "RO" => ro = Some(toks[1].to_string()),
+                "AF" => af = Some(toks[1].to_string()),
+                _ => continue,
+            }
+        }
+        let mut gt: Option<String> = None;
+        let format_id: Vec<&str> = toks[8].split(":").collect();
+        let format_fields: Vec<&str> = toks[9].split(":").collect();
+        for (index, format_id_field) in format_id.iter().enumerate() {
+            match format_id_field {
+                &"GT" => gt = Some(format_fields[index].to_string()),
+                _ => continue,
+            }
+        }
+        to_return.push(VcfLocusData{
+            locus_index: record_index,
+            chrom: chrom,
+            pos: pos,
+            ref_allele: ref_allele,
+            alt_allele: alt_allele,
+            qual: qual,
+            ao: ao,
+            ro: ro,
+            af: af,
+            gt: gt,
+        });
+        record_index += 1;
+    }
+    return Some(to_return);
+}
+
+
 pub fn create_output_dir(params: &Params) {
     Command::new("mkdir")
         .arg(&params.output_directory)
