@@ -191,9 +191,9 @@ fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &
     let mut normalized_log_likelihoods: Vec<f64> = Vec::new();
     for i in 0..cell_data.len() {
         if cell_log_likelihood_data.loci_used_per_cell[i] > 0.0 {
-            //normalized_log_likelihoods.push(cell_log_likelihood_data.log_likelihoods[i] / cell_log_likelihood_data.loci_used_per_cell[i]);
-            normalized_log_likelihoods.push((cell_log_likelihood_data.log_likelihoods[i] - cell_log_likelihood_data.expected_log_likelihoods[i]) /
-                cell_log_likelihood_data.expected_log_variances[i].sqrt());
+            normalized_log_likelihoods.push(cell_log_likelihood_data.log_likelihoods[i] / cell_log_likelihood_data.loci_used_per_cell[i]);
+            //normalized_log_likelihoods.push((cell_log_likelihood_data.log_likelihoods[i] - cell_log_likelihood_data.expected_log_likelihoods[i]) /
+            //    cell_log_likelihood_data.expected_log_variances[i].sqrt());
         
         } else { // need to filter cells with < some number of used loci TODO
             normalized_log_likelihoods.push(f64::NEG_INFINITY);
@@ -301,15 +301,29 @@ fn locus_filter_and_output_locus_data(params: &Params, used_loci: &mut Vec<bool>
 
     let mut locus_loglike_per_cell_minority: Vec<f64> = Vec::new();
     let mut locus_loglike_per_cell_majority: Vec<f64> = Vec::new();
+    let mut locus_loglike_per_cell_minority_for_threshold: Vec<f64> = Vec::new();
     for i in 0..likelihood_data.locus_contributions_minority.len() {
         if likelihood_data.locus_cells_minority[i] != 0 {
             locus_loglike_per_cell_minority.push(likelihood_data.locus_contributions_minority[i] / (likelihood_data.locus_cells_minority[i] as f64));
+            locus_loglike_per_cell_minority_for_threshold.push(likelihood_data.locus_contributions_minority[i] / (likelihood_data.locus_cells_minority[i] as f64));
         } else { locus_loglike_per_cell_minority.push(0.0); }
         if likelihood_data.locus_cells_majority[i] != 0 {
             locus_loglike_per_cell_majority.push(likelihood_data.locus_contributions_majority[i] / (likelihood_data.locus_cells_majority[i] as f64));
-        }
+        } else { locus_loglike_per_cell_majority.push(0.0); }
     }
     let ordering = argsort(&locus_loglike_per_cell_minority);
+    // get median and filter things 100*median
+    let mut data = Data::new(locus_loglike_per_cell_minority_for_threshold);
+    let median = data.median();
+    let threshold = median * 100.0; // TODO don't code things or choose arbitrary numbers
+    for locus_index in 0..used_loci.len() {
+        if locus_loglike_per_cell_minority[locus_index] < threshold {
+            used_loci[locus_index] = false;
+            println!("filtering locus {} locus index {} because it was contributing {} vs median {} per cell to log likelihood of minority cells", 
+                locus_ids[locus_index], locus_index, locus_loglike_per_cell_minority[locus_index], median);
+        }
+    }
+    
     for index in ordering {
         let minority_loglike = likelihood_data.locus_contributions_minority[index];
         let majority_loglike = likelihood_data.locus_contributions_majority[index];
