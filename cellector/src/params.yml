@@ -3,6 +3,11 @@ version: "1.0.0"
 author: Haynes Heaton <whheaton@gmail.com>
 about: genotype outlier detection for scRNAseq
 args:
+    - output_directory:
+        long: output_directory
+        takes_value: true
+        required: true
+        help: output directory where other output files will be stored
     - ref:
         long: ref
         short: r
@@ -25,21 +30,36 @@ args:
         long: min_alt
         takes_value: true
         required: false
-        help: minimum number of cells containing the alt allele for the variant to be used for clustering
+        help: minimum number of cells containing the alt allele for the variant to be used for clustering (default 4)
     - min_ref:
         long: min_ref
         takes_value: true
         required: false
-        help: minimum number of cells containing the ref allele for the variant to be used for clustering 
+        help: minimum number of cells containing the ref allele for the variant to be used for clustering (default 4)
     - ground_truth:
         long: ground_truth
         short: g
         required: false
         takes_value: true
         help: cell hashing assignments or other ground truth, first column barcodes second column assignment
-    - outlier_detector:
-        long: outlier_detector
-        short: d
-        required: false
+    - vcf:
+        long: vcf
+        short: v
         takes_value: true
-        help: outlier detection methode 'iqr
+        required: false
+        help: vcf associated with the alt.mtx and ref.mtx, only required to associated loci with variants and to get the genotypes of the minority and majority cells in a vcf output
+    - posterior_threshold:
+        long: posterior_threshold
+        takes_value: true
+        required: false
+        help: posterior probability threshold for assignment of minority or majority (default 0.999)
+    - interquartile_range_multiple:
+        long: interquartile_range_multiple
+        takes_value: true
+        required: false
+        help: number of interquartile range multiples away from 25th percentile to make the threshold to call an outline
+    - min_alleles_posterior:
+        long: min_alleles_posterior
+        takes_value: true
+        required: false
+        help: minimum number of alleles for both minority distribution and majority distribution to have for a locus to be used for posterior probability calculation 
