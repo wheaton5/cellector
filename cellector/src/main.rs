@@ -91,7 +91,7 @@ fn pretty_print(params: &Params, assignment_gt_counts: HashMap<String, HashMap<S
     string_build.push_str("cell_hashing");
     for _i in 0..(xoffset.checked_sub(12).unwrap_or(0)) { string_build.push_str(" "); }
     string_build.push_str("|");
-    for _i in 0..(header.len() - 1) { string_build.push_str("-"); }
+    for _i in 0..(header.len().checked_sub(1).unwrap_or(0)) { string_build.push_str("-"); }
     string_build.push_str("|\n");
     for (gt, count) in & count_vec {
         xoffset = xoffset.max(gt.len() + 3);
@@ -112,18 +112,18 @@ fn pretty_print(params: &Params, assignment_gt_counts: HashMap<String, HashMap<S
         let count1 = format!("{}",count1);
         let unassigned = format!("{}",unassigned);
         string_build.push_str(gt);
-        for _i in 0..(xoffset-gt.len()-1) { string_build.push_str(" "); }
+        for _i in 0..(xoffset.checked_sub(gt.len().checked_sub(1).unwrap_or(0)).unwrap_or(0)) { string_build.push_str(" "); }
         string_build.push_str(&format!(" |  {}",count0));
-        for _i in 0..(4-count0.len()) { string_build.push_str(" "); }
+        for _i in 0..(4_usize.checked_sub(count0.len()).unwrap_or(0)) { string_build.push_str(" "); }
         string_build.push_str(&format!(" |  {}",count1));
-        for _i in 0..(4-count1.len()) { string_build.push_str(" "); }
+        for _i in 0..(4_usize.checked_sub(count1.len()).unwrap_or(0)) { string_build.push_str(" "); }
         string_build.push_str(&format!(" |  {}",unassigned));
-        for _i in 0..(12-unassigned.len()) { string_build.push_str(" "); }
+        for _i in 0..(12_usize.checked_sub(unassigned.len()).unwrap_or(0)) { string_build.push_str(" "); }
         string_build.push_str("|\n");
     }
     for _i in 0..xoffset { string_build.push_str(" "); }
     string_build.push_str("|");
-    for _i in 0..(header.len()-1 ) { string_build.push_str("-"); }
+    for _i in 0..(header.len().checked_sub(1).unwrap_or(0) ) { string_build.push_str("-"); }
     string_build.push_str("|\n");
     println!("\n\n{}",string_build);
 } 
