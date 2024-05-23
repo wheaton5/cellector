@@ -8,6 +8,7 @@ extern crate itertools;
 mod stats;
 mod load_data;
 use load_data::CellData;
+use load_data::VcfLocusData;
 
 use clap::App;
 use std::fs::File;
@@ -27,15 +28,15 @@ fn main() {
     let (mut loci_used, locus_ids, cell_data, locus_counts, precomputed_log_binomial_coefficients) = 
         load_data::load_cell_data(&params, &cell_id_to_barcode, &cell_id_to_assignment);
     let vcf_data = load_data::load_vcf_data(&params);
-    cellector(&params, &mut loci_used, &locus_ids, &cell_data, &locus_counts, &precomputed_log_binomial_coefficients);
+    cellector(&params, &mut loci_used, &locus_ids, &cell_data, &locus_counts, &vcf_data, &precomputed_log_binomial_coefficients);
 }
 
-fn cellector(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) {
+fn cellector(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, vcf_data: &Option<Vec<VcfLocusData>>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) {
     let mut excluded_cells: HashSet<usize> = HashSet::new();
     let mut any_change;
     let mut iteration = 0;
     loop {
-        (any_change, excluded_cells) = compute_new_excluded(params, loci_used, locus_ids, cell_data, locus_counts, &excluded_cells, iteration, precomputed_log_binomial_coefficients);
+        (any_change, excluded_cells) = compute_new_excluded(params, loci_used, locus_ids, cell_data, locus_counts, &excluded_cells, iteration, vcf_data, precomputed_log_binomial_coefficients);
         iteration += 1;
         if !any_change { break; }
     }
@@ -183,7 +184,7 @@ fn get_loci_used_for_posterior_calc(params: &Params, loci_used: &Vec<bool>, cell
     return loci_used_for_posteriors;
 }
 
-fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, excluded_cells: &HashSet<usize>, iteration: usize, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> (bool, HashSet<usize>) {
+fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, excluded_cells: &HashSet<usize>, iteration: usize, vcf_data: &Option<Vec<VcfLocusData>>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> (bool, HashSet<usize>) {
     let alpha_betas = init_alpha_betas(locus_counts, excluded_cells, cell_data);
     let mut new_excluded: HashSet<usize> = HashSet::new();
 
@@ -213,7 +214,7 @@ fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &
     let any_change = num_new_cells_excluded > 0 || num_cells_rescued > 0;
     
     let locus_data = get_locus_log_likelihoods(&cell_log_likelihood_data.all_pmfs, cell_data, loci_used, &new_excluded);
-    locus_filter_and_output_locus_data(params, loci_used, &locus_data, locus_ids, iteration);
+    locus_filter_and_output_locus_data(params, loci_used, &locus_data, locus_ids, vcf_data, iteration);
     println!("detected {} new anomylous cells and rescued {} cells to the majority in iteration {}", num_new_cells_excluded, num_cells_rescued, iteration+1);
     println!("median normalized log likelihood {} with interquartile range {}, threshold {}", median, iqr, threshold);
     output_iteration_tsv(params, cell_data, &cell_log_likelihood_data, threshold, iteration);
@@ -293,11 +294,11 @@ fn get_locus_log_likelihoods(all_pmfs: &Vec<PMFData>, cell_data: &Vec<CellData>,
     };
 }
 
-fn locus_filter_and_output_locus_data(params: &Params, used_loci: &mut Vec<bool>, likelihood_data: &LocusLogLikelihoodData, locus_ids: &Vec<usize>, iteration: usize) {
+fn locus_filter_and_output_locus_data(params: &Params, used_loci: &mut Vec<bool>, likelihood_data: &LocusLogLikelihoodData, locus_ids: &Vec<usize>, vcf_data: &Option<Vec<VcfLocusData>>, iteration: usize) {
     let filename = format!("{}/iteration_{}_locus_contribution.tsv",params.output_directory, iteration);
     let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
     let mut writer = BufWriter::new(filehandle);
-    writer.write_all(format!("locus\tlog_likelihood_minority\tlog_likelihood_majority\texpected_loglike_minority\texpected_loglike_majority\tminority_cellcount\tmajority_cellcount\tlog_likelihood_minority_per_cell\tlog_likelihood_majority_per_cell\tminority_alt\tminority_ref\tmajority_alt\tmajority_ref\tminority_af\tmajority_af\n").as_bytes()).expect("could not write locus contribution file");
+    writer.write_all(format!("locus_id\tchrom\tpos\tlog_likelihood_minority\tlog_likelihood_majority\texpected_loglike_minority\texpected_loglike_majority\tminority_cellcount\tmajority_cellcount\tlog_likelihood_minority_per_cell\tlog_likelihood_majority_per_cell\tminority_alt\tminority_ref\tmajority_alt\tmajority_ref\tminority_af\tmajority_af\n").as_bytes()).expect("could not write locus contribution file");
 
     let mut locus_loglike_per_cell_minority: Vec<f64> = Vec::new();
     let mut locus_loglike_per_cell_majority: Vec<f64> = Vec::new();
@@ -342,9 +343,16 @@ fn locus_filter_and_output_locus_data(params: &Params, used_loci: &mut Vec<bool>
         let mut majority_af = 0.0;
         if minority_alt + minority_ref > 0 { minority_af = (minority_alt as f64)/((minority_alt + minority_ref) as f64); }
         if majority_alt + majority_ref > 0 { majority_af = (majority_alt as f64)/((majority_alt + majority_ref) as f64); }
-        
-        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        let mut chrom = "na";
+        let mut pos = "na";
+        if let Some(vcf_data) = vcf_data {
+            chrom = &vcf_data[locus_id].chrom;
+            pos = &vcf_data[locus_id].pos;
+        }
+        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 locus_id,
+                chrom,
+                pos,
                 minority_loglike,
                 majority_loglike,
                 minority_expected_loglike,
