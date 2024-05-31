@@ -10,16 +10,20 @@ Haynes Heaton <whheaton@gmail.com>
 genotype outlier detection for scRNAseq
 
 USAGE:
-    cellector [OPTIONS] --alt <alt> --barcodes <barcodes> --output_directory <output_directory> --ref <ref>
+    cellector [OPTIONS] --alt <alt> --ref <ref> --barcodes <barcodes> --output_directory <output_directory> 
 
 FLAGS:
     -h, --help       Prints help information
     -V, --version    Prints version information
 
 OPTIONS:
+    -r, --ref <ref>                                                      ref.mtx matrix from vartrix
     -a, --alt <alt>                                                      alt.mtx matrix from vartrix
+    -v, --vcf <vcf>
+            vcf associated with the alt.mtx and ref.mtx, only required to associated loci with variants and to get the
+            genotypes of the minority and majority cells in a vcf output
     -b, --barcodes <barcodes>                                            cell barcodes
-    -g, --ground_truth <ground_truth>
+    -g, --ground_truth <ground_truth> 
             cell hashing assignments or other ground truth, first column barcodes second column assignment
 
         --interquartile_range_multiple <interquartile_range_multiple>
@@ -40,8 +44,4 @@ OPTIONS:
         --posterior_threshold <posterior_threshold>
             posterior probability threshold for assignment of minority or majority (default 0.999)
 
-    -r, --ref <ref>                                                      ref.mtx matrix from vartrix
-    -v, --vcf <vcf>
-            vcf associated with the alt.mtx and ref.mtx, only required to associated loci with variants and to get the
-            genotypes of the minority and majority cells in a vcf output
 ```
