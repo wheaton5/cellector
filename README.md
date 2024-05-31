@@ -4,7 +4,7 @@ statistical model for finding anomalous genotype cells in mixed genotype scRNAse
 static binary for linux x64/x86 included in main directory
 python version is now depricated
 ```
-usage: ./cellector -h
+usage: ./cellector_linux -h
 cellector 1.0.0
 Haynes Heaton <whheaton@gmail.com>
 genotype outlier detection for scRNAseq
