@@ -9,16 +9,18 @@ mod stats;
 mod load_data;
 use load_data::CellData;
 use load_data::VcfLocusData;
+use load_data::reader;
 
 use clap::App;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write, BufRead};
 
 use hashbrown::{HashMap,HashSet};
 use itertools::izip;
 
 use statrs::statistics::OrderStatistics;
 use statrs::statistics::Data;
+use statrs::distribution::Discrete;
 
 fn main() {
     let params = load_params();
@@ -41,8 +43,90 @@ fn cellector(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>,
         if !any_change { break; }
     }
     let posteriors = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells, precomputed_log_binomial_coefficients);
+    output_final_vcf(params, cell_data, loci_used, locus_ids, &excluded_cells, vcf_data);
     output_final_assignments(params, cell_data, &posteriors, &excluded_cells);
 }
+
+fn output_final_vcf(params: &Params, cell_data: &Vec<CellData>, loci_used: &Vec<bool>, locus_ids: &Vec<usize>, excluded_cells: &HashSet<usize>, vcf_data: &Option<Vec<VcfLocusData>>) {
+    if params.vcf.is_none() { return; }
+    let (locus_alleles_minority, locus_alleles_majority) = load_data::load_mtx_final(params, excluded_cells);
+    // so I need to load the vcf file to get the header,
+    let vcf = &params.vcf.as_ref().unwrap().to_string();
+    let mut record_index: usize = 0;
+    let ambient_percent = 0.03; // TODO dont hard code stuff
+    let gt_threshold = 0.99; // TODO dont hard code stuff
+    let reader = reader(&vcf);
+    // and I need to make the output vcf file
+    let filename = format!("{}/cellector.vcf",params.output_directory);
+    let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
+    let mut writer = BufWriter::new(filehandle);
+    for line in reader.lines() {
+        let mut line = line.expect("Unable to read a line in the ground truth file").to_string();
+        if line.starts_with("##") {
+            let line = format!("{}\n",line);
+            writer.write_all(line.as_bytes()).expect("could not write to vcf");
+        } else if line.starts_with("#CHROM") {
+            // last line of header need to add samples majority and minority
+            //line.pop(); // remove trailing newline
+            let line = format!("{}\tmajority\tminority\n",line);
+            writer.write_all(line.as_bytes()).expect("could not write to vcf");
+        } else {
+            // so I need to go from allele counts to a genotype... 
+            // so a homozygous ref allele is drawn from a binomial with p = 0+err
+            // het is drawn from binomial p = 0.5 + err and hom alt is p = 1-err
+            let total_alt = locus_alleles_minority[record_index].alt_count + locus_alleles_majority[record_index].alt_count;
+            let total_ref = locus_alleles_minority[record_index].ref_count + locus_alleles_majority[record_index].ref_count;
+            let mut soup_frac = 0.5;
+            if total_alt + total_ref > 0 {
+                soup_frac = (total_alt as f64)/((total_alt + total_ref) as f64);
+            }
+            let mut p_hom_alt = (1.0 - ambient_percent) * 0.99 + ambient_percent * soup_frac;
+            let mut p_het = (1.0 - ambient_percent) * 0.5 + ambient_percent * soup_frac;
+            let mut p_hom_ref = (1.0 - ambient_percent) * 0.01 + ambient_percent * soup_frac;
+            let minority_alt = locus_alleles_minority[record_index].alt_count;
+            let minority_ref = locus_alleles_minority[record_index].ref_count;
+            let majority_alt = locus_alleles_majority[record_index].alt_count;
+            let majority_ref = locus_alleles_majority[record_index].ref_count;
+            let min_hom_alt_like = statrs::distribution::Binomial::new(p_hom_alt, (minority_alt+minority_ref) as u64).unwrap().pmf(minority_alt as u64);
+            let min_het_like = statrs::distribution::Binomial::new(p_het, (minority_alt+minority_ref) as u64).unwrap().pmf(minority_alt as u64);
+            let min_hom_ref_like = statrs::distribution::Binomial::new(p_hom_ref, (minority_alt+minority_ref) as u64).unwrap().pmf(minority_alt as u64);
+            let maj_hom_alt_like = statrs::distribution::Binomial::new(p_hom_alt, (majority_alt+majority_ref) as u64).unwrap().pmf(majority_alt as u64);
+            let maj_het_like = statrs::distribution::Binomial::new(p_het, (majority_alt+majority_ref) as u64).unwrap().pmf(majority_alt as u64);
+            let maj_hom_ref_like = statrs::distribution::Binomial::new(p_hom_ref, (majority_alt+majority_ref) as u64).unwrap().pmf(majority_alt as u64);
+            let mut gt_majority = "./.";
+            let mut gt_minority = "./.";
+            let min_denom = 1.0/3.0 * min_hom_alt_like + 1.0/3.0 * min_het_like + 1.0/3.0 * min_hom_ref_like;
+            let maj_denom = 1.0/3.0 * maj_hom_alt_like + 1.0/3.0 * maj_het_like + 1.0/3.0 * maj_hom_ref_like;
+            let min_hom_alt_post = min_hom_alt_like * 1.0/3.0 / min_denom;
+            let min_het_post = min_het_like * 1.0/3.0 / min_denom;
+            let min_hom_ref_post = min_hom_ref_like * 1.0/3.0 / min_denom;
+            
+            let max_post_minority = min_hom_alt_post.max(min_het_post).max(min_hom_ref_post);
+            if min_hom_alt_post > gt_threshold {
+                gt_minority = "1/1";
+            } else if min_het_post > gt_threshold {
+                gt_minority = "0/1";
+            } else if min_hom_ref_post > gt_threshold {
+                gt_minority = "0/0";
+            }
+            let maj_hom_alt_post = maj_hom_alt_like * 1.0/3.0 / maj_denom;
+            let maj_het_post = maj_het_like * 1.0/3.0 / maj_denom;
+            let maj_hom_ref_post = maj_hom_ref_like * 1.0/3.0 / maj_denom;
+            let max_post_majority = maj_hom_alt_post.max(maj_het_post).max(maj_hom_ref_post);
+            if maj_hom_alt_post > gt_threshold {
+                gt_majority = "1/1";
+            } else if maj_het_post > gt_threshold {
+                gt_majority = "0/1";
+            } else if maj_hom_ref_post > gt_threshold {
+                gt_majority = "0/0";
+            }
+            //line.pop(); // remove trailing newline
+            let line = format!("{}\tGT:GP:AO:RO\t{}:{}:{}:{}\t{}:{}:{}:{}\n", line, gt_majority, max_post_majority, majority_alt, majority_ref,  gt_minority, max_post_minority, minority_alt, minority_ref);
+            writer.write_all(line.as_bytes()).expect("could not write to vcf");
+            record_index += 1;
+        }
+    }
+} 
 
 fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posteriors: &Vec<f64>, excluded_cells: &HashSet<usize>) {
     let filename = format!("{}/cellector_assignments.tsv",params.output_directory);
@@ -372,7 +456,7 @@ fn locus_filter_and_output_locus_data(params: &Params, used_loci: &mut Vec<bool>
     } 
 }
 
-struct AlleleCount { ref_count: usize, alt_count: usize, }
+pub struct AlleleCount { ref_count: usize, alt_count: usize, }
 
 pub fn argsort<T: PartialOrd>(data: &Vec<T>) -> Vec<usize> {
     let mut indices = (0..data.len()).collect::<Vec<_>>();

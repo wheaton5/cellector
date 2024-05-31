@@ -6,8 +6,9 @@ use File;
 use izip;
 use stats;
 use std::process::Command;
-use hashbrown::HashMap;
+use hashbrown::{HashMap,HashSet};
 use Params;
+use AlleleCount;
 
 pub struct CellLocusData {
     pub locus_index: usize,
@@ -103,6 +104,31 @@ pub fn load_ground_truth(params: &Params, barcode_to_cell_id: &HashMap<String, u
         }
     }
     return cell_id_to_ground_truth;
+}
+
+pub fn load_mtx_final(params: &Params, excluded_cells: &HashSet<usize>) -> (Vec<AlleleCount>, Vec<AlleleCount>) {
+    let mut locus_alleles_minority: Vec<AlleleCount> = Vec::new();
+    let mut locus_alleles_majority: Vec<AlleleCount> = Vec::new();
+    let (mut alt_reader, mut ref_reader) = (reader(&params.alt_mtx), reader(&params.ref_mtx));
+
+    let (total_loci, _total_cells) = consume_mtx_header(&mut alt_reader, &mut ref_reader);
+    for _ in 0..total_loci {
+        locus_alleles_minority.push(AlleleCount{ alt_count: 0, ref_count: 0 });
+        locus_alleles_majority.push(AlleleCount{ alt_count: 0, ref_count: 0 });
+    }
+    for (alt_line, ref_line) in izip!(alt_reader.lines(), ref_reader.lines()) {
+        let (alt_line, ref_line) = (alt_line.expect("cannot read alt mtx"), ref_line.expect("cannot read ref mtx"));
+        let data: VartrixDatum = read_mtx_lines(alt_line, ref_line);
+        if excluded_cells.contains(&data.cell_id) {
+            locus_alleles_minority[data.locus].alt_count += data.alt_count;
+            locus_alleles_minority[data.locus].ref_count += data.ref_count;
+        } else {
+            locus_alleles_majority[data.locus].alt_count += data.alt_count;
+            locus_alleles_majority[data.locus].ref_count += data.ref_count;
+        }
+    }
+
+    return (locus_alleles_minority, locus_alleles_majority);
 }
 
 pub fn load_cell_data(params: &Params, cell_id_to_barcode: &Vec<String>, cell_id_to_assignment: &Vec<String>) ->
