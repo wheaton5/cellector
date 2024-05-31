@@ -3,7 +3,7 @@ statistical model for finding anomalous genotype cells in mixed genotype scRNAse
 
 static binary for linux x64/x86 included in main directory
 python version is now depricated
-
+'''
 usage: ./cellector -h
 cellector 1.0.0
 Haynes Heaton <whheaton@gmail.com>
@@ -44,3 +44,4 @@ OPTIONS:
     -v, --vcf <vcf>
             vcf associated with the alt.mtx and ref.mtx, only required to associated loci with variants and to get the
             genotypes of the minority and majority cells in a vcf output
+'''
