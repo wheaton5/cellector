@@ -139,6 +139,7 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
     for cell_id in 0..cell_data.len() {
         let cell = &cell_data[cell_id];
         let mut posterior_assignment = "unassigned";
+        //let mut assignment = "unassigned";
         if posteriors[cell_id] > params.posterior_threshold {
             posterior_assignment = "0";
         } else if 1.0 - posteriors[cell_id] > params.posterior_threshold {
@@ -154,6 +155,9 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         if excluded_cells.contains(&cell_id) {
             anomally_assignment = "0";
         } else { anomally_assignment = "1"; } // maybe do something here where we leave some unassigned if they are near the threshold?
+        //if posterior_assignment == "0" && anomally_assignment == "0" {
+        //    assignment
+        //}
         let line = format!("{}\t{}\t{}\t{:.5}\t{:.5}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, posteriors[cell_id], 1.0 - posteriors[cell_id], cell.assignment);
         writer.write_all(line.as_bytes()).expect("could not write to cellector assignment file");
     }
@@ -224,8 +228,8 @@ fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<
     let minority_fraction = (excluded_cells.len() as f64)/(cell_data.len() as f64);
     let alpha_betas_minority_dist = init_alpha_betas(locus_counts, &included_cells, cell_data);
     for locus in 0..loci_used.len() {
-        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0)*minority_fraction + 1.0;
-        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)*minority_fraction + 1.0;
+        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0)+ 1.0;//*minority_fraction + 1.0;
+        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)+ 1.0;//*minority_fraction + 1.0;
     }
     let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
     let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist, excluded_cells, precomputed_log_binomial_coefficients);
