@@ -1,0 +1,61 @@
+name: combiner
+version: "1.0.0"
+author: Haynes Heaton <whheaton@gmail.com>
+about: combines data from genotype scRNAseq experiments (output from vartix)
+args:
+    - output_directory:
+        long: output_directory
+        short: o
+        takes_value: true
+        required: true
+        help: name of output directory to put files
+    - vcf1:
+        long: vcf1
+        takes_value: true
+        required: true
+        help: variant file for dataset 1
+    - vcf2:
+        long: vcf2
+        takes_value: true
+        required: true
+        help: variant file for dataset 2
+    - ref1:
+        long: ref1
+        takes_value: true
+        required: true
+        help: ref.mtx matrix from vartrix for dataset1 
+    - alt1: 
+        long: alt1
+        takes_value: true
+        required: true
+        help: alt.mtx matrix from vartrix for dataset1
+    - ref2:
+        long: ref2
+        takes_value: true
+        required: true
+        help: ref.mtx matrix from vartrix for dataset2 
+    - alt2: 
+        long: alt2
+        takes_value: true
+        required: true
+        help: alt.mtx matrix from vartrix for dataset2
+    - barcodes1:
+        long: barcodes1
+        takes_value: true
+        required: true
+        help: cell barcodes for dataset1
+    - barcodes2:
+        long: barcodes2
+        takes_value: true
+        required: true
+        help: cell barcodes for dataset2
+    - num_cells_1:
+        long: num_cells_1
+        takes_value: true
+        required: true
+        help: number of cells to use from dataset1
+    - num_cells_2:
+        long: num_cells_2
+        takes_value: true
+        required: true
+        help: number of cells to use from dataset2
