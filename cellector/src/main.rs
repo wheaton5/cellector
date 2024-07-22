@@ -37,14 +37,16 @@ fn cellector(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>,
     let mut excluded_cells: HashSet<usize> = HashSet::new();
     let mut any_change;
     let mut iteration = 0;
+    let mut log_likelihoods_loci_normalized;
+    let mut loci_used_per_cell;
     loop {
-        (any_change, excluded_cells) = compute_new_excluded(params, loci_used, locus_ids, cell_data, locus_counts, &excluded_cells, iteration, vcf_data, precomputed_log_binomial_coefficients);
+        (any_change, excluded_cells, log_likelihoods_loci_normalized, loci_used_per_cell) = compute_new_excluded(params, loci_used, locus_ids, cell_data, locus_counts, &excluded_cells, iteration, vcf_data, precomputed_log_binomial_coefficients);
         iteration += 1;
         if !any_change { break; }
     }
     let posteriors = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells, precomputed_log_binomial_coefficients);
     output_final_vcf(params, cell_data, loci_used, locus_ids, &excluded_cells, vcf_data);
-    output_final_assignments(params, cell_data, &posteriors, &excluded_cells);
+    output_final_assignments(params, cell_data, &posteriors, &excluded_cells, &log_likelihoods_loci_normalized, &loci_used_per_cell);
 }
 
 fn output_final_vcf(params: &Params, cell_data: &Vec<CellData>, loci_used: &Vec<bool>, locus_ids: &Vec<usize>, excluded_cells: &HashSet<usize>, vcf_data: &Option<Vec<VcfLocusData>>) {
@@ -128,11 +130,11 @@ fn output_final_vcf(params: &Params, cell_data: &Vec<CellData>, loci_used: &Vec<
     }
 } 
 
-fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posteriors: &Vec<f64>, excluded_cells: &HashSet<usize>) {
+fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posteriors: &Vec<f64>, excluded_cells: &HashSet<usize>, normalized_log_likelihoods: &Vec<f64>, loci_used_per_cell: &Vec<f64>) {
     let filename = format!("{}/cellector_assignments.tsv",params.output_directory);
     let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
     let mut writer = BufWriter::new(filehandle);
-    let header = format!("barcode\tposterior_assignment\tanomally_assignment\tminority_posterior\tmajority_posterior\tground_truth_assignment\n");
+    let header = format!("barcode\tposterior_assignment\tanomally_assignment\tlog_likelihood_loci_normalized\tloci_used\tposterior_assign_qual\tground_truth_assignment\n");
     writer.write_all(header.as_bytes()).expect("could not write to cellector assignment file");
     let mut assignment_gt_counts: HashMap<String, HashMap<String, usize>> = HashMap::new();
     let mut gt_counts: HashMap<String, usize> = HashMap::new();
@@ -145,6 +147,7 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         } else if 1.0 - posteriors[cell_id] > params.posterior_threshold {
             posterior_assignment = "1";
         }
+        if cell.cell_loci_data.len() < params.min_loci_used { posterior_assignment = "unassigned"; }
         let counts = assignment_gt_counts.entry(posterior_assignment.to_string()).or_insert(HashMap::new());
         let count = counts.entry(cell.assignment.clone()).or_insert(0);
         *count += 1;
@@ -158,7 +161,10 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         //if posterior_assignment == "0" && anomally_assignment == "0" {
         //    assignment
         //}
-        let line = format!("{}\t{}\t{}\t{:.5}\t{:.5}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, posteriors[cell_id], 1.0 - posteriors[cell_id], cell.assignment);
+        let post = posteriors[cell_id].max(1.0-posteriors[cell_id]);
+        let qual = -10.0 * (1.0 - post).log10();
+        let qual = qual as usize;
+        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, normalized_log_likelihoods[cell_id], loci_used_per_cell[cell_id] as usize, qual, cell.assignment);
         writer.write_all(line.as_bytes()).expect("could not write to cellector assignment file");
     }
     pretty_print(params, assignment_gt_counts, gt_counts);
@@ -225,15 +231,17 @@ fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<
         }
     }
     let mut alpha_betas_majority_dist = init_alpha_betas(locus_counts, excluded_cells, cell_data);
-    let minority_fraction = (excluded_cells.len() as f64)/(cell_data.len() as f64);
+    let minority_fraction = (excluded_cells.len() as f64 + 1.0)/(cell_data.len() as f64 + 1.0);
+    let minority_fraction = minority_fraction.max(0.01);
     let alpha_betas_minority_dist = init_alpha_betas(locus_counts, &included_cells, cell_data);
     for locus in 0..loci_used.len() {
-        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0)+ 1.0;//*minority_fraction + 1.0;
-        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)+ 1.0;//*minority_fraction + 1.0;
+        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0) *minority_fraction + 1.0;
+        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)*minority_fraction + 1.0;
     }
     let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
     let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist, excluded_cells, precomputed_log_binomial_coefficients);
     let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist, &included_cells, precomputed_log_binomial_coefficients);
+   
     let log_prior_minority: f64 = minority_fraction.ln();
     let log_prior_majority: f64 = (1.0 - minority_fraction).ln();
     for cell_id in 0..cell_data.len() {
@@ -267,12 +275,12 @@ fn get_loci_used_for_posterior_calc(params: &Params, loci_used: &Vec<bool>, cell
         let min_alleles = params.min_alleles_posterior;
         if loci_used[locus_index] && minority_alt + minority_ref >= min_alleles && majority_alt + majority_ref >= min_alleles {
             loci_used_for_posteriors.push(true);
-        } else { loci_used_for_posteriors.push(false); }
+        } else { loci_used_for_posteriors.push(true); } // TODO this was false but had the effect of not using any loci when no outliers are detetect then no loci would be used for posterior calculation 
     }
     return loci_used_for_posteriors;
 }
 
-fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, excluded_cells: &HashSet<usize>, iteration: usize, vcf_data: &Option<Vec<VcfLocusData>>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> (bool, HashSet<usize>) {
+fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64; 2]>, excluded_cells: &HashSet<usize>, iteration: usize, vcf_data: &Option<Vec<VcfLocusData>>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> (bool, HashSet<usize>, Vec<f64>, Vec<f64>) {
     let alpha_betas = init_alpha_betas(locus_counts, excluded_cells, cell_data);
     let mut new_excluded: HashSet<usize> = HashSet::new();
 
@@ -285,7 +293,7 @@ fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &
             //    cell_log_likelihood_data.expected_log_variances[i].sqrt());
         
         } else { // need to filter cells with < some number of used loci TODO
-            normalized_log_likelihoods.push(f64::NEG_INFINITY);
+            normalized_log_likelihoods.push(0.0);
         }
     }
     let mut normalized_tmp = Data::new(normalized_log_likelihoods.clone());
@@ -301,12 +309,16 @@ fn compute_new_excluded(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &
     let num_cells_rescued = excluded_cells.difference(&new_excluded).collect::<Vec<&usize>>().len();
     let any_change = num_new_cells_excluded > 0 || num_cells_rescued > 0;
     
-    let locus_data = get_locus_log_likelihoods(&cell_log_likelihood_data.all_pmfs, cell_data, loci_used, &new_excluded);
-    locus_filter_and_output_locus_data(params, loci_used, &locus_data, locus_ids, vcf_data, iteration);
+    
     println!("detected {} new anomylous cells and rescued {} cells to the majority in iteration {}", num_new_cells_excluded, num_cells_rescued, iteration+1);
     println!("median normalized log likelihood {} with interquartile range {}, threshold {}", median, iqr, threshold);
+    //for cell_id in &new_excluded {
+        //println!("\tnew excluded cell {} with {} loci, log likelihood {}",cell_id,cell_log_likelihood_data.loci_used_per_cell[*cell_id],normalized_log_likelihoods[*cell_id]);
+    //}
+    let locus_data = get_locus_log_likelihoods(&cell_log_likelihood_data.all_pmfs, cell_data, loci_used, &new_excluded);
+    locus_filter_and_output_locus_data(params, loci_used, &locus_data, locus_ids, vcf_data, iteration);
     output_iteration_tsv(params, cell_data, &cell_log_likelihood_data, threshold, iteration);
-    return (any_change, new_excluded);
+    return (any_change, new_excluded, normalized_log_likelihoods, cell_log_likelihood_data.loci_used_per_cell);
 }
 
 fn output_iteration_tsv(params: &Params, cell_data: &Vec<CellData>, cell_log_likelihood_data: &CellLogLikelihoodData, threshold: f64, iteration: usize) {
@@ -404,7 +416,7 @@ fn locus_filter_and_output_locus_data(params: &Params, used_loci: &mut Vec<bool>
     // get median and filter things 100*median
     let mut data = Data::new(locus_loglike_per_cell_minority_for_threshold);
     let median = data.median();
-    let threshold = median * 100.0; // TODO don't code things or choose arbitrary numbers
+    let threshold = -80.0;//median * 100.0; // TODO don't code things or choose arbitrary numbers
     for locus_index in 0..used_loci.len() {
         if locus_loglike_per_cell_minority[locus_index] < threshold {
             used_loci[locus_index] = false;
@@ -585,6 +597,8 @@ pub struct Params {
     interquartile_range_multiple: f64,
     output_directory: String,
     min_alleles_posterior: usize,
+    expected_percent_minority: Option<f64>,
+    min_loci_used: usize,
 }
 
 fn load_params() -> Params{
@@ -612,6 +626,12 @@ fn load_params() -> Params{
     let output_directory = params.value_of("output_directory").unwrap().to_string();
     let min_alleles_posterior = params.value_of("min_alleles_posterior").unwrap_or("5");
     let min_alleles_posterior = min_alleles_posterior.to_string().parse::<usize>().unwrap();
+    let expected_percent_minority = match params.value_of("expected_percent_minority") {
+        Some(x) => Some(x.to_string().parse::<f64>().unwrap()),
+        None => None,
+    };
+    let min_loci_used = params.value_of("min_loci_for_assignment").unwrap_or("30");
+    let min_loci_used = min_loci_used.to_string().parse::<usize>().unwrap();
 
     let params = Params {
         ref_mtx: ref_mtx,
@@ -625,6 +645,8 @@ fn load_params() -> Params{
         interquartile_range_multiple: interquartile_range_multiple,
         output_directory: output_directory,
         min_alleles_posterior: min_alleles_posterior,
+        expected_percent_minority: expected_percent_minority,
+        min_loci_used: min_loci_used,
     };
     return params;
 }
