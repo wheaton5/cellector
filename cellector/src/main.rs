@@ -163,7 +163,7 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         //}
         let post = posteriors[cell_id].max(1.0-posteriors[cell_id]);
         let qual = -10.0 * (1.0 - post).log10();
-        let qual = qual as usize;
+        let qual = qual.min(255.0) as usize;
         let line = format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, normalized_log_likelihoods[cell_id], loci_used_per_cell[cell_id] as usize, qual, cell.assignment);
         writer.write_all(line.as_bytes()).expect("could not write to cellector assignment file");
     }
