@@ -1,18 +1,20 @@
-
+#!/usr/bin/env python
 import argparse
 
 parser = argparse.ArgumentParser(
-    description="single cell RNAseq mixed genotype clustering using sparse mixture model clustering.")
+    description="single cell RNAseq foreign genotype cell detection")
 parser.add_argument("-i", "--bam", required = True, help = "cellranger bam")
 parser.add_argument("-b", "--barcodes", required = True, help = "barcodes.tsv from cellranger")
 parser.add_argument("-f", "--fasta", required = True, help = "reference fasta file")
 parser.add_argument("-t", "--threads", required = True, type = int, help = "max threads to use")
-parser.add_argument("-o", "--out_dir", required = True, help = "name of directory to place souporcell files")
+parser.add_argument("-o", "--out_dir", required = True, help = "name of directory to place cellector files")
 parser.add_argument("--common_variants", required = True, default = None, 
     help = "common variant loci or known variant loci vcf, must be vs same reference fasta")
-parser.add_argument("--min_alt", required = False, default = "10", help = "min alt to use locus, default = 10.")
-parser.add_argument("--min_ref", required = False, default = "10", help = "min ref to use locus, default = 10.")
+parser.add_argument("--min_alt", required = False, default = "4", help = "min alt to use locus, default = 4.")
+parser.add_argument("--min_ref", required = False, default = "4", help = "min ref to use locus, default = 4.")
 parser.add_argument("--ignore", required = False, default = False, type = bool, help = "set to True to ignore data error assertions")
+parser.add_argument("--cellector_binary", required=False, default = "cellector_linux", help = "/path/to/cellector")
+parser.add_argument("--souporcell_binary", required=False, default = "souporcell_linux", help="/path/to/souporcell")
 args = parser.parse_args()
 
 print("checking modules")
@@ -195,3 +197,22 @@ if not os.path.exists(args.out_dir + "/vartrix.done"):
     vartrix(args, final_vcf, bam)
 ref_mtx = args.out_dir + "/ref.mtx"
 alt_mtx = args.out_dir + "/alt.mtx"
+subprocess.check_call(["cp", args.barcodes, args.out_dir+"/."])
+cellector_cmd = ["./"+args.cellector_binary, "-a", alt_mtx, "-r", ref_mtx, "--output_directory",args.out_dir, 
+                "--min_alt",args.min_alt, "--min_ref", args.min_ref, "--barcodes", args.barcodes, "--vcf", final_vcf]
+
+print("running cellector")
+print(" ".join(cellector_cmd))
+with open(args.out_dir+"/cellector.err",'w') as err:
+    with open(args.out_dir+"/cellector.out",'w') as out:
+        subprocess.check_call(cellector_cmd,stdout=out, stderr=err)
+
+souporcell_cmd = ["./"+args.souporcell_binary,"-a", alt_mtx, "-r", ref_mtx, "--barcodes", args.barcodes,
+    "-t", str(args.threads), "-k", "2", "--min_ref", str(args.min_ref), "--min_alt", str(args.min_alt)]
+print("running souporcell")
+print(" ".join(souporcell_cmd))
+with open(args.out_dir+"/souporcell.err",'w') as err:
+    with open(args.out_dir+"/souporcell.out", 'w') as out:
+        subprocess.check_call(souporcell_cmd, stdout=out, stderr=err)
+
+

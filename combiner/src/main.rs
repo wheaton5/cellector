@@ -27,11 +27,11 @@ fn main() {
     
     let (mut alt_reader, mut ref_reader) = (reader(&params.alt1), reader(&params.ref1));
     let (_total_loci, total_cells) = consume_mtx_header(&mut alt_reader, &mut ref_reader);
-    let cells1 = select_cells(params.num_cells_1, total_cells);
+    let cells1 = select_cells(&params, params.num_cells_1, total_cells);
     let (mut alt_reader, mut ref_reader) = (reader(&params.alt2), reader(&params.ref2));
     let (_total_loci, total_cells) = consume_mtx_header(&mut alt_reader, &mut ref_reader);
-    let cells2 = select_cells(params.num_cells_2, total_cells);
-
+    let cells2 = select_cells(&params, params.num_cells_2, total_cells);
+    // decide which cells are doublets and that mapping
     let (cell_ids_data1, cell_ids_data2) = get_cell_ids_and_output_barcodes(&params, &cells1, &cells2);
     output_new_mtxs(&params, &locus_data2_to_data1, total_loci_out, &cell_ids_data1, &cell_ids_data2);
     // so now we need to make a new barcodes file
@@ -47,6 +47,10 @@ fn output_new_mtxs(params: &Params, locus_data2_to_data1: &HashMap<usize, usize>
     let filename = format!("{}/ref.mtx", params.output_directory);
     let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
     let mut ref_writer = BufWriter::new(filehandle);
+    let tmpseed = params.seed.to_be_bytes();//[params.seed; 32]; // 4 guaranteed random number by fair dice roll https://xkcd.com/221/
+    let mut seed = [0u8;32];
+    for i in 0..8 { seed[i] = tmpseed[i]; }
+    let mut rng: StdRng = SeedableRng::from_seed(seed);
 
     let total_cells = params.num_cells_1 + params.num_cells_2;
     let total_loci = total_loci_out;
@@ -62,8 +66,17 @@ fn output_new_mtxs(params: &Params, locus_data2_to_data1: &HashMap<usize, usize>
     let (total_loci, _total_cells) = consume_mtx_header(&mut alt_reader, &mut ref_reader);
     for (alt_line, ref_line) in izip!(alt_reader.lines(), ref_reader.lines()) {
         let (alt_line, ref_line) = (alt_line.expect("cannot read alt mtx"), ref_line.expect("cannot read ref mtx"));
-        let data: VartrixDatum = read_mtx_lines(alt_line, ref_line);
+        let mut data: VartrixDatum = read_mtx_lines(alt_line, ref_line);
         if let Some(&cell_id) = cell_ids_data1.get(&data.cell_id) {
+            if data.locus < 1 {println!("what1? {}",data.locus); }
+            let refcount = data.ref_count.clone();
+            let altcount = data.alt_count.clone();
+            for _ in 0..refcount {
+                if rng.gen::<f64>() < params.downsample_rate { data.ref_count -= 1; }
+            }
+            for _ in 0..altcount {
+                if rng.gen::<f64>() < params.downsample_rate { data.alt_count -= 1; }
+            }
             lines.push((data.locus, cell_id, data.ref_count, data.alt_count));
         }
     }
@@ -72,8 +85,17 @@ fn output_new_mtxs(params: &Params, locus_data2_to_data1: &HashMap<usize, usize>
     consume_mtx_header(&mut alt_reader, &mut ref_reader);
     for (alt_line, ref_line) in izip!(alt_reader.lines(), ref_reader.lines()) {
         let (alt_line, ref_line) = (alt_line.expect("cannot read alt mtx"), ref_line.expect("cannot read ref mtx"));
-        let data: VartrixDatum = read_mtx_lines(alt_line, ref_line);
+        let mut data: VartrixDatum = read_mtx_lines(alt_line, ref_line);
         if let Some(&cell_id) = cell_ids_data2.get(&data.cell_id) {
+            if *locus_data2_to_data1.get(&data.locus).unwrap() < 1 { println!("what? {}", locus_data2_to_data1.get(&data.locus).unwrap());}
+            let refcount = data.ref_count.clone();
+            let altcount = data.alt_count.clone();
+            for _ in 0..refcount {
+                if rng.gen::<f64>() < params.downsample_rate { data.ref_count -= 1; }
+            }
+            for _ in 0..altcount {
+                if rng.gen::<f64>() < params.downsample_rate { data.alt_count -= 1; }
+            }
             lines.push((*locus_data2_to_data1.get(&data.locus).unwrap(), cell_id, data.ref_count, data.alt_count));
         }
     }
@@ -95,10 +117,10 @@ fn read_mtx_lines(alt_line: String, ref_line: String) ->
     VartrixDatum {
     let alt_tokens: Vec<&str> = alt_line.split_whitespace().collect();
     let ref_tokens: Vec<&str> = ref_line.split_whitespace().collect();
-    let locus = alt_tokens[0].to_string().parse::<usize>().unwrap() - 1; // 0-indexed Locus_ID
+    let locus = alt_tokens[0].to_string().parse::<usize>().unwrap(); // 0-indexed Locus_ID
     let ref_count = ref_tokens[2].to_string().parse::<usize>().unwrap();
     let alt_count = alt_tokens[2].to_string().parse::<usize>().unwrap();
-    let cell_id = alt_tokens[1].to_string().parse::<usize>().unwrap() - 1;
+    let cell_id = alt_tokens[1].to_string().parse::<usize>().unwrap();
     return VartrixDatum {
         locus: locus,
         cell_id: cell_id,
@@ -212,9 +234,11 @@ pub fn reader(filename: &str) -> Box<dyn BufRead> {
     }
 }
 
-fn select_cells(num_cells_to_use: usize, total_cells: usize) -> Vec<usize> {
+fn select_cells(params: &Params, num_cells_to_use: usize, total_cells: usize) -> Vec<usize> {
     assert!(num_cells_to_use <= total_cells, "cant ask for more cells than exist in dataset");
-    let seed = [4; 32]; // 4 guaranteed random number by fair dice roll https://xkcd.com/221/
+    let tmpseed = params.seed.to_be_bytes();//[params.seed; 32]; // 4 guaranteed random number by fair dice roll https://xkcd.com/221/
+    let mut seed = [0u8;32];
+    for i in 0..8 { seed[i] = tmpseed[i]; }
     let mut rng: StdRng = SeedableRng::from_seed(seed);
     // do something
     let cell_ids = (1..(total_cells+1)).choose_multiple(&mut rng, num_cells_to_use);
@@ -252,6 +276,8 @@ pub struct Params {
     num_cells_1: usize,
     num_cells_2: usize,
     output_directory: String,
+    seed: usize,
+    downsample_rate: f64,
 }
 
 fn load_params() -> Params{
@@ -270,6 +296,10 @@ fn load_params() -> Params{
     let num_cells_2 = params.value_of("num_cells_2").unwrap().to_string();
     let num_cells_2 = num_cells_2.parse::<usize>().unwrap();
     let output_directory = params.value_of("output_directory").unwrap().to_string();
+    let seed = params.value_of("seed").unwrap_or("4").to_string();
+    let seed = seed.parse::<usize>().unwrap();
+    let downsample_rate = params.value_of("downsample_rate").unwrap_or("0.0").to_string();
+    let downsample_rate = downsample_rate.parse::<f64>().unwrap();
 
     return Params {
         vcf1: vcf1,
@@ -283,5 +313,7 @@ fn load_params() -> Params{
         num_cells_1: num_cells_1,
         num_cells_2: num_cells_2,
         output_directory: output_directory,
+        seed: seed,
+        downsample_rate: downsample_rate,
     }
 }

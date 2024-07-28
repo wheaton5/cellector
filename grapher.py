@@ -23,7 +23,7 @@ for file_name in globed_files:
         q1 = sorted_loci_norm[len(sorted_loci_norm)//4]
         q3 = sorted_loci_norm[int(len(sorted_loci_norm)*0.75)]
         interquartile_range = q3 - q1
-        threshold = q1 - 4*interquartile_range
+        threshold = q1 - 5*interquartile_range
 
         graph = ggplot(df)+geom_point(aes(x="cell_id",y="neg_log_likelihood_loci_normalized",size="num_loci_used",color="assignment"))+geom_abline(intercept=-threshold,slope=0)
         graphname = file_name[:-4]+".pdf"

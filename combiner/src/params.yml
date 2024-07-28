@@ -59,3 +59,13 @@ args:
         takes_value: true
         required: true
         help: number of cells to use from dataset2
+    - seed:
+        long: seed
+        takes_value: true
+        required: false
+        help: set random number generator seed for deterministic behavior
+    - downsample_rate:
+        long: downsample_rate
+        takes_value: true
+        required: false
+        help: downsample data (probability not percent so 0.2 not 20) default 0.0

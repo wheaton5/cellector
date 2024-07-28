@@ -63,3 +63,13 @@ args:
         takes_value: true
         required: false
         help: minimum number of alleles for both minority distribution and majority distribution to have for a locus to be used for posterior probability calculation 
+    - expected_percent_minority:
+        long: expected_percent_minority
+        takes_value: true
+        required: false
+        help: percent of cells expected to come from the minority genotype (eg 25 for 25 percent not 0.25) up to 35
+    - min_loci_for_assignment:
+        long: min_loci_for_assignment
+        takes_value: true
+        required: false
+        help: minimum number of loci needed to assign cell to minority or majority, cells with fewer than this number of loci will be left unassigned (default 30)

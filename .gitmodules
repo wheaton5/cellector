@@ -1,0 +1,3 @@
+[submodule "souporcell"]
+	path = souporcell
+	url = git@github.com:wheaton5/souporcell.git
