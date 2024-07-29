@@ -1,6 +1,39 @@
 # cellector
 statistical model for finding anomalous genotype cells in mixed genotype scRNAseq data
 
+From cellranger outputs (bam, cell barcodes.tsv) you can use cellector_pipeline.py with the following usage.
+```
+./cellector_pipeline.py -h
+usage: cellector_pipeline.py [-h] -i BAM -b BARCODES -f FASTA -t THREADS -o OUT_DIR --common_variants COMMON_VARIANTS
+                             [--min_alt MIN_ALT] [--min_ref MIN_REF] [--ignore IGNORE] [--cellector_binary CELLECTOR_BINARY]
+                             [--souporcell_binary SOUPORCELL_BINARY]
+
+single cell RNAseq foreign genotype cell detection
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -i BAM, --bam BAM     cellranger bam
+  -b BARCODES, --barcodes BARCODES
+                        barcodes.tsv from cellranger
+  -f FASTA, --fasta FASTA
+                        reference fasta file
+  -t THREADS, --threads THREADS
+                        max threads to use
+  -o OUT_DIR, --out_dir OUT_DIR
+                        name of directory to place cellector files
+  --common_variants COMMON_VARIANTS
+                        common variant loci or known variant loci vcf, must be vs same reference fasta
+  --min_alt MIN_ALT     min alt to use locus, default = 4.
+  --min_ref MIN_REF     min ref to use locus, default = 4.
+  --ignore IGNORE       set to True to ignore data error assertions
+  --cellector_binary CELLECTOR_BINARY
+                        /path/to/cellector
+  --souporcell_binary SOUPORCELL_BINARY
+                        /path/to/souporcell
+```
+
+If you have the alt.mtx and ref.mtx you can use cellector directly with the following usage.
+
 static binary for linux x64/x86 included in main directory
 python version is now depricated
 ```
