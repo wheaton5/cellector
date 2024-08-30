@@ -13,6 +13,9 @@ args = parser.parse_args()
 
 globed_files = glob.glob(args.data_directory + "/iteration_?.tsv")
 
+if(len(globed_files) == 0):
+    print("no iteration tsv files found")
+
 for file_name in globed_files:
     with open(file_name, mode='r') as fid:
         df = pd.read_csv(fid, sep="\t")
