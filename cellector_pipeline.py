@@ -15,6 +15,7 @@ parser.add_argument("--min_ref", required = False, default = "4", help = "min re
 parser.add_argument("--ignore", required = False, default = False, type = bool, help = "set to True to ignore data error assertions")
 parser.add_argument("--cellector_binary", required=False, default = "cellector_linux", help = "/path/to/cellector")
 parser.add_argument("--souporcell_binary", required=False, default = "souporcell_linux", help="/path/to/souporcell")
+parser.add_argument("--grapher_script", required=False, default = "grapher.py", help="/path/to/grapher.py")
 args = parser.parse_args()
 
 print("checking modules")
@@ -214,5 +215,12 @@ print(" ".join(souporcell_cmd))
 with open(args.out_dir+"/souporcell.err",'w') as err:
     with open(args.out_dir+"/souporcell.out", 'w') as out:
         subprocess.check_call(souporcell_cmd, stdout=out, stderr=err)
+
+grapher_cmd = ["python", args.grapher_script, "-d", args.out_dir]
+print("running grapher")
+print(" ".join(grapher_cmd))
+with open(args.out_dir+"/grapher.err",'w') as err:
+    with open(args.out_dir+"/grapher.out", 'w') as out:
+        subprocess.check_call(grapher_cmd, stdout=out, stderr=err)
 
 
