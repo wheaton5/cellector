@@ -44,9 +44,9 @@ fn cellector(params: &Params, loci_used: &mut Vec<bool>, locus_ids: &Vec<usize>,
         iteration += 1;
         if !any_change { break; }
     }
-    let posteriors = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells, precomputed_log_binomial_coefficients);
+    let (posteriors, doublet_posteriors, log_likelihoods) = calculate_posteriors(params, loci_used, cell_data, locus_counts, &excluded_cells, precomputed_log_binomial_coefficients);
     output_final_vcf(params, cell_data, loci_used, locus_ids, &excluded_cells, vcf_data);
-    output_final_assignments(params, cell_data, &posteriors, &excluded_cells, &log_likelihoods_loci_normalized, &loci_used_per_cell);
+    output_final_assignments(params, cell_data, &posteriors, &doublet_posteriors, &log_likelihoods, &excluded_cells, &log_likelihoods_loci_normalized, &loci_used_per_cell);
 }
 
 fn output_final_vcf(params: &Params, cell_data: &Vec<CellData>, loci_used: &Vec<bool>, locus_ids: &Vec<usize>, excluded_cells: &HashSet<usize>, vcf_data: &Option<Vec<VcfLocusData>>) {
@@ -130,11 +130,11 @@ fn output_final_vcf(params: &Params, cell_data: &Vec<CellData>, loci_used: &Vec<
     }
 } 
 
-fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posteriors: &Vec<f64>, excluded_cells: &HashSet<usize>, normalized_log_likelihoods: &Vec<f64>, loci_used_per_cell: &Vec<f64>) {
+fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posteriors: &Vec<f64>, doublet_posteriors: &Vec<f64>, log_likelihoods: &Vec<(f64, f64)>, excluded_cells: &HashSet<usize>, normalized_log_likelihoods: &Vec<f64>, loci_used_per_cell: &Vec<f64>) {
     let filename = format!("{}/cellector_assignments.tsv",params.output_directory);
     let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
     let mut writer = BufWriter::new(filehandle);
-    let header = format!("barcode\tposterior_assignment\tanomally_assignment\tlog_likelihood_loci_normalized\tloci_used\tposterior_assign_qual\tground_truth_assignment\n");
+    let header = format!("barcode\tposterior_assignment\tanomally_assignment\tlog_likelihood_loci_normalized\tloci_used\tposterior_assign_qual\tmajority_log_likelihood\tminority_log_likelihood\tground_truth_assignment\n");
     writer.write_all(header.as_bytes()).expect("could not write to cellector assignment file");
     let mut assignment_gt_counts: HashMap<String, HashMap<String, usize>> = HashMap::new();
     let mut gt_counts: HashMap<String, usize> = HashMap::new();
@@ -146,6 +146,9 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
             posterior_assignment = "0";
         } else if 1.0 - posteriors[cell_id] > params.posterior_threshold {
             posterior_assignment = "1";
+        }
+        if doublet_posteriors[cell_id] > 0.5 {
+            posterior_assignment = "doublet";
         }
         if cell.cell_loci_data.len() < params.min_loci_used { posterior_assignment = "unassigned"; }
         let counts = assignment_gt_counts.entry(posterior_assignment.to_string()).or_insert(HashMap::new());
@@ -164,7 +167,7 @@ fn output_final_assignments(params: &Params, cell_data: &Vec<CellData>, posterio
         let post = posteriors[cell_id].max(1.0-posteriors[cell_id]);
         let qual = -10.0 * (1.0 - post).log10();
         let qual = qual.min(255.0) as usize;
-        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, normalized_log_likelihoods[cell_id], loci_used_per_cell[cell_id] as usize, qual, cell.assignment);
+        let line = format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", cell.barcode, posterior_assignment, anomally_assignment, normalized_log_likelihoods[cell_id], loci_used_per_cell[cell_id] as usize, qual, log_likelihoods[cell_id].0, log_likelihoods[cell_id].1, cell.assignment);
         writer.write_all(line.as_bytes()).expect("could not write to cellector assignment file");
     }
     pretty_print(params, assignment_gt_counts, gt_counts);
@@ -222,8 +225,11 @@ fn pretty_print(params: &Params, assignment_gt_counts: HashMap<String, HashMap<S
     println!("\n\n{}",string_build);
 } 
 
-fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64;2]>, excluded_cells: &HashSet<usize>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> Vec<f64> {
+fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, locus_counts: &Vec<[f64;2]>, excluded_cells: &HashSet<usize>, precomputed_log_binomial_coefficients: &Vec<Vec<f64>>) -> (Vec<f64>, Vec<f64>, Vec<(f64, f64)>) {
     let mut posteriors: Vec<f64> = Vec::new();
+    let mut doublet_posteriors: Vec<f64> = Vec::new();
+
+    let mut log_likelihoods: Vec<(f64, f64)> = Vec::new();
     let mut included_cells: HashSet<usize> = HashSet::new();
     for cell_id in 0..cell_data.len() {
         if !excluded_cells.contains(&cell_id) {
@@ -232,26 +238,45 @@ fn calculate_posteriors(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<
     }
     let mut alpha_betas_majority_dist = init_alpha_betas(locus_counts, excluded_cells, cell_data);
     let minority_fraction = (excluded_cells.len() as f64 + 1.0)/(cell_data.len() as f64 + 1.0);
-    let minority_fraction = minority_fraction.max(0.01);
     let alpha_betas_minority_dist = init_alpha_betas(locus_counts, &included_cells, cell_data);
+    let mut alpha_betas_doublet_dist: Vec<AlphaBeta> = Vec::new();
+
     for locus in 0..loci_used.len() {
-        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0) *minority_fraction + 1.0;
-        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0)*minority_fraction + 1.0;
+        let alpha = (alpha_betas_majority_dist[locus].alpha - 1.0) * minority_fraction + (alpha_betas_minority_dist[locus].alpha - 1.0) + 1.0;
+        let beta = (alpha_betas_majority_dist[locus].beta - 1.0) * minority_fraction + (alpha_betas_minority_dist[locus].beta - 1.0) + 1.0;
+        alpha_betas_doublet_dist.push(AlphaBeta{alpha: alpha, beta: beta});
     }
-    let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
+
+    let minority_fraction = minority_fraction.max(0.01);
+    for locus in 0..loci_used.len() {
+        alpha_betas_majority_dist[locus].alpha = (alpha_betas_majority_dist[locus].alpha - 1.0) * minority_fraction + 1.0;
+        alpha_betas_majority_dist[locus].beta = (alpha_betas_majority_dist[locus].beta - 1.0) * minority_fraction + 1.0;
+    }
+        let loci_used_for_posteriors: Vec<bool> = get_loci_used_for_posterior_calc(params, loci_used, cell_data, excluded_cells, locus_counts);
     let minority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_minority_dist, excluded_cells, precomputed_log_binomial_coefficients);
     let majority_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_majority_dist, &included_cells, precomputed_log_binomial_coefficients);
-   
+    let doublet_dist_likelihoods: CellLogLikelihoodData = get_cell_log_likelihoods(&loci_used_for_posteriors, cell_data, &alpha_betas_doublet_dist, &included_cells, precomputed_log_binomial_coefficients);
+    let log_prior_doublet: f64 = ((cell_data.len() as f64)/1000.0/100.0*minority_fraction.max(0.1)).ln(); // 1% doublets per 1000 cells so if there are 10000 cells we have 10000/1000 = 10% so for .1 we div by 100 again.
+    // then we need to consider that we can only detect cross genotype doublets. So multiply
+    // by minority fraction. But if the minority fraction is like 1% or .1%, there is basically no way we will 
+    // have enough evidence to detect the true doublets so limit minority fraction to 10%
+    
     let log_prior_minority: f64 = minority_fraction.ln();
     let log_prior_majority: f64 = (1.0 - minority_fraction).ln();
     for cell_id in 0..cell_data.len() {
         let log_numerator = log_prior_minority + minority_dist_likelihoods.log_likelihoods[cell_id];
-        let log_denominator = stats::logsumexp(log_numerator, log_prior_majority + majority_dist_likelihoods.log_likelihoods[cell_id]);
+        let mut log_denominator = stats::logsumexp(log_numerator, log_prior_majority + majority_dist_likelihoods.log_likelihoods[cell_id]);
+        
+        let log_doublet_numerator = log_prior_doublet + doublet_dist_likelihoods.log_likelihoods[cell_id];
+        log_denominator = stats::logsumexp(log_denominator, log_doublet_numerator);
         let log_minority_posterior = log_numerator - log_denominator;
         let posterior = log_minority_posterior.exp();
         posteriors.push(posterior);
+        let doublet_posterior = (log_doublet_numerator - log_denominator).exp();
+        doublet_posteriors.push(doublet_posterior);
+        log_likelihoods.push((majority_dist_likelihoods.log_likelihoods[cell_id], minority_dist_likelihoods.log_likelihoods[cell_id]));
     }
-    return posteriors;
+    return (posteriors, doublet_posteriors, log_likelihoods);
 }
 
 fn get_loci_used_for_posterior_calc(params: &Params, loci_used: &Vec<bool>, cell_data: &Vec<CellData>, excluded_cells: &HashSet<usize>, locus_counts: &Vec<[f64; 2]>) -> Vec<bool> {
