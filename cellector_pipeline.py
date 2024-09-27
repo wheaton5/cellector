@@ -232,21 +232,28 @@ with open(args.out_dir+"/cellector_assignments.tsv", "r") as cellector_assign_fi
     cellector_assign_fid.readline()
     for line in cellector_assign_fid.readlines():
         tokens = line.split("\t")
+        majority_likelihood = float(tokens[6])
+        minority_likelihood = float(tokens[7])
+        val = majority_likelihood / np.average([majority_likelihood, minority_likelihood])
         if tokens[1] == "0":
-            cellector_log_likelihood_0.append(float(tokens[7]))
-        if tokens[1] == "1":
-            cellector_log_likelihood_1.append(float(tokens[7]))
+            cellector_log_likelihood_0.append(val)
+        elif tokens[1] == "1":
+            cellector_log_likelihood_1.append(val)
     cellector_value = abs(np.average(cellector_log_likelihood_0) - np.average(cellector_log_likelihood_1))
-with open(args.out_dir+"/souporcell.out", "r") as souporcell_assign_fid:
-    souporcell_log_likelihood_0 = []
-    souporcell_log_likelihood_1 = []
-    for line in souporcell_assign_fid.readlines():
+with open(args.out_dir+"/troublet.out", "r") as troublet_assign_fid:
+    troublet_log_likelihood_0 = []
+    troublet_log_likelihood_1 = []
+    for line in troublet_assign_fid.readlines():
         tokens = line.split("\t")
-        if tokens[1] == "0":
-            souporcell_log_likelihood_0.append(float(tokens[2]))
-        else:
-            souporcell_log_likelihood_1.append(float(tokens[2]))
-    souporcell_value = abs(np.average(souporcell_log_likelihood_0) - np.average(souporcell_log_likelihood_1))
+        if tokens[1] == "singlet":
+            cluster_0_likelihood = float(tokens[7])
+            cluster_1_likelihood = float(tokens[8])
+            val = cluster_0_likelihood / np.average([cluster_0_likelihood, cluster_1_likelihood])
+            if tokens[2] == "0":
+                troublet_log_likelihood_0.append(val)
+            elif tokens[2] == "1":
+                troublet_log_likelihood_1.append(val)
+    souporcell_value = abs(np.average(troublet_log_likelihood_0) - np.average(troublet_log_likelihood_1))
 
 
 
