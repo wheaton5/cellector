@@ -15,6 +15,7 @@ parser.add_argument("--min_ref", required = False, default = "4", help = "min re
 parser.add_argument("--ignore", required = False, default = False, type = bool, help = "set to True to ignore data error assertions")
 parser.add_argument("--cellector_binary", required=False, default = "cellector_linux", help = "/path/to/cellector")
 parser.add_argument("--souporcell_binary", required=False, default = "souporcell_linux", help="/path/to/souporcell")
+parser.add_argument("--troublet_binary", required=False, default = "troublet_linux", help="/path/to/troublet")
 parser.add_argument("--grapher_script", required=False, default = "grapher.py", help="/path/to/grapher.py")
 args = parser.parse_args()
 
@@ -219,6 +220,11 @@ print(" ".join(souporcell_cmd))
 with open(args.out_dir+"/souporcell.err",'w') as err:
     with open(args.out_dir+"/souporcell.out", 'w') as out:
         subprocess.check_call(souporcell_cmd, stdout=out, stderr=err)
+troublet_bin = args.troublet_binary if args.troublet_binary[0] == "/" else "./"+args.troublet_binary
+troublet_cmd = [troublet_bin, "--alts", alt_mtx, "--refs", ref_mtx, "--clusters", args.out_dir+"/souporcell.out"]
+with open(args.out_dir+"/troublet.err",'w') as err:
+    with open(args.out_dir+"/troublet.out", 'w') as out:
+        subprocess.check_call(troublet_cmd, stdout=out, stderr=err)
 
 with open(args.out_dir+"/cellector_assignments.tsv", "r") as cellector_assign_fid:
     cellector_log_likelihood_0 = []
@@ -241,6 +247,8 @@ with open(args.out_dir+"/souporcell.out", "r") as souporcell_assign_fid:
         else:
             souporcell_log_likelihood_1.append(float(tokens[2]))
     souporcell_value = abs(np.average(souporcell_log_likelihood_0) - np.average(souporcell_log_likelihood_1))
+
+
 
 print("cellector", cellector_value)
 print("souporcell", souporcell_value)
