@@ -196,10 +196,13 @@ else:
         final_vcf = done.readline().strip()
 if not os.path.exists(args.out_dir + "/vartrix.done"):
     vartrix(args, final_vcf, bam)
+print(final_vcf)
 ref_mtx = args.out_dir + "/ref.mtx"
 alt_mtx = args.out_dir + "/alt.mtx"
 subprocess.check_call(["cp", args.barcodes, args.out_dir+"/."])
-cellector_cmd = ["./"+args.cellector_binary, "-a", alt_mtx, "-r", ref_mtx, "--output_directory",args.out_dir, 
+
+cellector_bin = args.cellector_binary if args.cellector_binary[0] == "/" else "./"+args.cellector_binary
+cellector_cmd = [cellector_bin, "-a", alt_mtx, "-r", ref_mtx, "--output_directory",args.out_dir, 
                 "--min_alt",args.min_alt, "--min_ref", args.min_ref, "--barcodes", args.barcodes, "--vcf", final_vcf]
 
 print("running cellector")
@@ -208,13 +211,40 @@ with open(args.out_dir+"/cellector.err",'w') as err:
     with open(args.out_dir+"/cellector.out",'w') as out:
         subprocess.check_call(cellector_cmd,stdout=out, stderr=err)
 
-souporcell_cmd = ["./"+args.souporcell_binary,"-a", alt_mtx, "-r", ref_mtx, "--barcodes", args.barcodes,
+souporcell_bin = args.souporcell_binary if args.souporcell_binary[0] == "/" else "./"+args.souporcell_binary
+souporcell_cmd = [souporcell_bin,"-a", alt_mtx, "-r", ref_mtx, "--barcodes", args.barcodes,
     "-t", str(args.threads), "-k", "2", "--min_ref", str(args.min_ref), "--min_alt", str(args.min_alt)]
 print("running souporcell")
 print(" ".join(souporcell_cmd))
 with open(args.out_dir+"/souporcell.err",'w') as err:
     with open(args.out_dir+"/souporcell.out", 'w') as out:
         subprocess.check_call(souporcell_cmd, stdout=out, stderr=err)
+
+with open(args.out_dir+"/cellector_assignments.tsv", "r") as cellector_assign_fid:
+    cellector_log_likelihood_0 = []
+    cellector_log_likelihood_1 = []
+    cellector_assign_fid.readline()
+    for line in cellector_assign_fid.readlines():
+        tokens = line.split("\t")
+        if tokens[1] == "0":
+            cellector_log_likelihood_0.append(float(tokens[7]))
+        if tokens[1] == "1":
+            cellector_log_likelihood_1.append(float(tokens[7]))
+    cellector_value = abs(np.average(cellector_log_likelihood_0) - np.average(cellector_log_likelihood_1))
+with open(args.out_dir+"/souporcell.out", "r") as souporcell_assign_fid:
+    souporcell_log_likelihood_0 = []
+    souporcell_log_likelihood_1 = []
+    for line in souporcell_assign_fid.readlines():
+        tokens = line.split("\t")
+        if tokens[1] == "0":
+            souporcell_log_likelihood_0.append(float(tokens[2]))
+        else:
+            souporcell_log_likelihood_1.append(float(tokens[2]))
+    souporcell_value = abs(np.average(souporcell_log_likelihood_0) - np.average(souporcell_log_likelihood_1))
+
+print("cellector", cellector_value)
+print("souporcell", souporcell_value)
+print("use ", "cellector" if cellector_value > souporcell_value else "souporcell")
 
 grapher_cmd = ["python", args.grapher_script, "-d", args.out_dir]
 print("running grapher")
