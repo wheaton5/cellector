@@ -182,6 +182,12 @@ def vartrix(args, final_vcf, final_bam):
     subprocess.check_call(['rm', args.out_dir + "/vartrix.out", args.out_dir + "/vartrix.err"])
     return((ref_mtx, alt_mtx))
 
+def read_tsv(filename):
+    with open(filename,'r') as fid:
+        table = []
+        for line in fid.readlines():
+            table.append(line.split("\t"))
+    return table
 
 
 #### MAIN RUN SCRIPT
@@ -255,11 +261,24 @@ with open(args.out_dir+"/troublet.out", "r") as troublet_assign_fid:
                 troublet_log_likelihood_1.append(val)
     souporcell_value = abs(np.average(troublet_log_likelihood_0) - np.average(troublet_log_likelihood_1))
 
+preference = "cellector" if cellector_value > souporcell_value else "souporcell"
+cellector_values  = read_tsv(args.out_dir+"/cellector_assignments.tsv")
+souporcell_values = read_tsv(args.out_dir+"/troublet.out")
+final_output_values = [[] for row in cellector_values]
+if preference == "cellector":
+    for i in range(len(cellector_values)):
+        row = cellector_values[i]
+        final_output_values[i].append(row[0])  # barcode
+        final_output_values[i].append(row[1])  # assignment
+else:
+    for i in range(len(souporcell_values)):
+        row = souporcell_values[i]
+        final_output_values[i].append(row[0])  # barcode
+        status = row[1]
+        final_output_values[i].append(row[2] if status == "singlet" else status)  # assignment
 
-
-print("cellector", cellector_value)
-print("souporcell", souporcell_value)
-print("use ", "cellector" if cellector_value > souporcell_value else "souporcell")
+for i in range(10):
+    print(final_output_values[i])
 
 grapher_cmd = ["python", args.grapher_script, "-d", args.out_dir]
 print("running grapher")
