@@ -186,7 +186,7 @@ def read_tsv(filename):
     with open(filename,'r') as fid:
         table = []
         for line in fid.readlines():
-            table.append(line.split("\t"))
+            table.append(line.strip().split("\t"))
     return table
 
 
@@ -262,23 +262,45 @@ with open(args.out_dir+"/troublet.out", "r") as troublet_assign_fid:
     souporcell_value = abs(np.average(troublet_log_likelihood_0) - np.average(troublet_log_likelihood_1))
 
 preference = "cellector" if cellector_value > souporcell_value else "souporcell"
+print("prefering the output of ", preference)
 cellector_values  = read_tsv(args.out_dir+"/cellector_assignments.tsv")
 souporcell_values = read_tsv(args.out_dir+"/troublet.out")
 final_output_values = [[] for row in cellector_values]
+final_output_values[0].append("barcode")
+final_output_values[0].append("assignment")
 if preference == "cellector":
-    for i in range(len(cellector_values)):
+    for i in range(1, len(cellector_values)):
         row = cellector_values[i]
         final_output_values[i].append(row[0])  # barcode
         final_output_values[i].append(row[1])  # assignment
 else:
-    for i in range(len(souporcell_values)):
+    for i in range(1, len(souporcell_values)):
         row = souporcell_values[i]
         final_output_values[i].append(row[0])  # barcode
         status = row[1]
         final_output_values[i].append(row[2] if status == "singlet" else status)  # assignment
+# the rest of the cellector columns    2,3...
+header = cellector_values[0]
+for j in range(2, len(header)):
+    final_output_values[0].append("cellector_"+header[j])
 
-for i in range(10):
-    print(final_output_values[i])
+for i in range(1, len(cellector_values)):
+    row = cellector_values[i]
+    for j in range(2, len(row)):
+        final_output_values[i].append(row[j])
+# the rest of the souporcell columns   1, 3,4...
+header = souporcell_values[0]
+for j in range(2, len(header)):
+    final_output_values[0].append("souporcell_"+header[j])
+for i in range(1, len(souporcell_values)):
+    row = souporcell_values[i]
+    final_output_values[i].append(row[1])
+    for j in range(3, len(row)):
+        final_output_values[i].append(row[j])
+
+with open(args.out_dir+"final_output.out", 'w') as final_output_fid:
+    for row in range(len(final_output_values)):
+        final_output_fid.write("\t".join(final_output_values[row])+"\n")
 
 grapher_cmd = ["python", args.grapher_script, "-d", args.out_dir]
 print("running grapher")
