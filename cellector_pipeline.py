@@ -12,6 +12,7 @@ parser.add_argument("--common_variants", required = True, default = None,
     help = "common variant loci or known variant loci vcf, must be vs same reference fasta")
 parser.add_argument("--min_alt", required = False, default = "4", help = "min alt to use locus, default = 4.")
 parser.add_argument("--min_ref", required = False, default = "4", help = "min ref to use locus, default = 4.")
+parser.add_argument("--program_preference", required = False, default = "auto", help = "whether to prefer cellector or souporcell values for the final output file; valid inputs are \"cellector\", \"souporcell\", and \"auto\" (default)")
 parser.add_argument("--ignore", required = False, default = False, type = bool, help = "set to True to ignore data error assertions")
 parser.add_argument("--cellector_binary", required=False, default = "cellector_linux", help = "/path/to/cellector")
 parser.add_argument("--souporcell_binary", required=False, default = "souporcell_linux", help="/path/to/souporcell")
@@ -240,12 +241,12 @@ with open(args.out_dir+"/cellector_assignments.tsv", "r") as cellector_assign_fi
         tokens = line.split("\t")
         majority_likelihood = float(tokens[6])
         minority_likelihood = float(tokens[7])
-        val = majority_likelihood / np.average([majority_likelihood, minority_likelihood])
+        val = majority_likelihood / np.mean([majority_likelihood, minority_likelihood])
         if tokens[1] == "0":
             cellector_log_likelihood_0.append(val)
         elif tokens[1] == "1":
             cellector_log_likelihood_1.append(val)
-    cellector_value = abs(np.average(cellector_log_likelihood_0) - np.average(cellector_log_likelihood_1))
+    cellector_value = abs(np.mean(cellector_log_likelihood_0) - np.mean(cellector_log_likelihood_1))
 with open(args.out_dir+"/troublet.out", "r") as troublet_assign_fid:
     troublet_log_likelihood_0 = []
     troublet_log_likelihood_1 = []
@@ -254,14 +255,19 @@ with open(args.out_dir+"/troublet.out", "r") as troublet_assign_fid:
         if tokens[1] == "singlet":
             cluster_0_likelihood = float(tokens[7])
             cluster_1_likelihood = float(tokens[8])
-            val = cluster_0_likelihood / np.average([cluster_0_likelihood, cluster_1_likelihood])
+            val = cluster_0_likelihood / np.mean([cluster_0_likelihood, cluster_1_likelihood])
             if tokens[2] == "0":
                 troublet_log_likelihood_0.append(val)
             elif tokens[2] == "1":
                 troublet_log_likelihood_1.append(val)
-    souporcell_value = abs(np.average(troublet_log_likelihood_0) - np.average(troublet_log_likelihood_1))
+    souporcell_value = abs(np.mean(troublet_log_likelihood_0) - np.mean(troublet_log_likelihood_1))
 
-preference = "cellector" if cellector_value > souporcell_value else "souporcell"
+print("cellector_value: ", cellector_value)  # debugging
+print("souporcell_value: ", souporcell_value)  # debugging
+if args.program_preference == "cellector" or args.program_preference == "souporcell":
+    preference = args.program_preference
+else:
+    preference = "cellector" if cellector_value > souporcell_value else "souporcell"
 print("prefering the output of ", preference)
 cellector_values  = read_tsv(args.out_dir+"/cellector_assignments.tsv")
 souporcell_values = read_tsv(args.out_dir+"/troublet.out")
