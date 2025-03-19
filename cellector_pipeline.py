@@ -190,8 +190,18 @@ def read_tsv(filename):
             table.append(line.strip().split("\t"))
     return table
 
+def check_for_tilde(path):
+    if path[0] == "~":
+        raise ValueError('Please do not use "~/" at the start of this path in ther parameters: ' + path)
+        # \\TODO: better understand the bug associated with this
+    
+
 
 #### MAIN RUN SCRIPT
+check_for_tilde(args.souporcell_binary)
+check_for_tilde(args.cellector_binary)
+check_for_tilde(args.troublet_binary)
+
 if os.path.isdir(args.out_dir):
     print("restarting pipeline in existing directory " + args.out_dir)
 else:
@@ -208,6 +218,7 @@ print(final_vcf)
 ref_mtx = args.out_dir + "/ref.mtx"
 alt_mtx = args.out_dir + "/alt.mtx"
 subprocess.check_call(["cp", args.barcodes, args.out_dir+"/."])
+
 
 cellector_bin = args.cellector_binary if args.cellector_binary[0] == "/" else "./"+args.cellector_binary
 cellector_cmd = [cellector_bin, "-a", alt_mtx, "-r", ref_mtx, "--output_directory",args.out_dir, 
