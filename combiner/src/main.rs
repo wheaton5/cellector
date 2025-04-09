@@ -30,17 +30,26 @@ fn main() {
     let cells1 = select_cells(&params, params.num_cells_1, total_cells);
     let (mut alt_reader, mut ref_reader) = (reader(&params.alt2), reader(&params.ref2));
     let (_total_loci, total_cells) = consume_mtx_header(&mut alt_reader, &mut ref_reader);
-    let cells2 = select_cells(&params, params.num_cells_2, total_cells);
+    let cells2: Vec<usize>;
+    let num_cells_2: usize;
+    if params.dataset2_mask.is_some() {
+        cells2 = select_cells_by_barcode(&params, params.dataset2_mask.clone().unwrap());
+        num_cells_2 = cells2.len();
+    } else {
+        assert!(params.num_cells_2.is_some(), "missing argument num_cells_2 or dataset2_mask");
+        cells2 = select_cells(&params, params.num_cells_2.unwrap(), total_cells);
+        num_cells_2 = params.num_cells_2.unwrap();
+    }
     // decide which cells are doublets and that mapping
     let (cell_ids_data1, cell_ids_data2) = get_cell_ids_and_output_barcodes(&params, &cells1, &cells2);
-    output_new_mtxs(&params, &locus_data2_to_data1, total_loci_out, &cell_ids_data1, &cell_ids_data2);
+    output_new_mtxs(&params, &locus_data2_to_data1, total_loci_out, &cell_ids_data1, &cell_ids_data2, num_cells_2);
     // so now we need to make a new barcodes file
-    println!("{},{}", params.num_cells_1, params.num_cells_2);
+    println!("{},{}", params.num_cells_1, num_cells_2);
     // and now a new 
     //println!("{:?}", cells1);  
 }
 
-fn output_new_mtxs(params: &Params, locus_data2_to_data1: &HashMap<usize, usize>, total_loci_out: usize, cell_ids_data1: &HashMap<usize, usize>, cell_ids_data2: &HashMap<usize, usize>) {
+fn output_new_mtxs(params: &Params, locus_data2_to_data1: &HashMap<usize, usize>, total_loci_out: usize, cell_ids_data1: &HashMap<usize, usize>, cell_ids_data2: &HashMap<usize, usize>, num_cells_2: usize) {
     let filename = format!("{}/alt.mtx", params.output_directory);
     let filehandle = File::create(&filename).expect(&format!("Unable to create file {}", &filename));
     let mut alt_writer = BufWriter::new(filehandle);
@@ -52,7 +61,7 @@ fn output_new_mtxs(params: &Params, locus_data2_to_data1: &HashMap<usize, usize>
     for i in 0..8 { seed[i] = tmpseed[i]; }
     let mut rng: StdRng = SeedableRng::from_seed(seed);
 
-    let total_cells = params.num_cells_1 + params.num_cells_2;
+    let total_cells = params.num_cells_1 + num_cells_2;
     let total_loci = total_loci_out;
     let total_entries = 0;
     alt_writer.write_all(b"%%MatrixMarket matrix coordinate real general\n% written by sprs\n");
@@ -245,6 +254,28 @@ fn select_cells(params: &Params, num_cells_to_use: usize, total_cells: usize) ->
     return cell_ids;
 }
 
+fn select_cells_by_barcode(params: &Params, dataset2_mask: String) -> Vec<usize> {
+    let mut barcodes2: Vec<String> = Vec::new();
+    let mut barcodes_mask: Vec<String> = Vec::new();
+    let reader2 = reader(&params.barcodes2);
+    for line in reader2.lines() {
+        let line = line.expect("cannot read barcodes2");
+        barcodes2.push(line.to_string());
+    }
+    let reader_mask = reader(&dataset2_mask);
+    for line in reader_mask.lines() {
+        let line = line.expect("cannot read dataset2_mask");
+        barcodes_mask.push(line.to_string());
+    }
+    let mut cell_ids: Vec<usize> = Vec::new();
+    for (id, barcode) in barcodes2.iter().enumerate() {
+        if barcodes_mask.contains(barcode) {
+            cell_ids.push(id+1);
+        }
+    }
+    return cell_ids;
+}
+
 fn consume_mtx_header(alt_reader: &mut Box<dyn BufRead>, ref_reader: &mut Box<dyn BufRead>) ->
     (usize, usize) {
     // total_loci, total_cells
@@ -274,7 +305,8 @@ pub struct Params {
     barcodes1: String,
     barcodes2: String,
     num_cells_1: usize,
-    num_cells_2: usize,
+    num_cells_2: Option<usize>,
+    dataset2_mask: Option<String>,
     output_directory: String,
     seed: usize,
     downsample_rate: f64,
@@ -293,8 +325,14 @@ fn load_params() -> Params{
     let barcodes2 = params.value_of("barcodes2").unwrap().to_string();
     let num_cells_1 = params.value_of("num_cells_1").unwrap().to_string();
     let num_cells_1 = num_cells_1.parse::<usize>().unwrap();
-    let num_cells_2 = params.value_of("num_cells_2").unwrap().to_string();
-    let num_cells_2 = num_cells_2.parse::<usize>().unwrap();
+    let num_cells_2 = match params.value_of("num_cells_2") {
+        Some(x) => Some(x.to_string().parse::<usize>().unwrap()),
+        None => None,
+    };
+    let dataset2_mask = match params.value_of("dataset2_mask") {
+        Some(x) => Some(x.to_string()),
+        None => None,
+    };
     let output_directory = params.value_of("output_directory").unwrap().to_string();
     let seed = params.value_of("seed").unwrap_or("4").to_string();
     let seed = seed.parse::<usize>().unwrap();
@@ -312,6 +350,7 @@ fn load_params() -> Params{
         barcodes2: barcodes2,
         num_cells_1: num_cells_1,
         num_cells_2: num_cells_2,
+        dataset2_mask: dataset2_mask,
         output_directory: output_directory,
         seed: seed,
         downsample_rate: downsample_rate,
