@@ -85,6 +85,98 @@ test_data/
 
 These matrices are intentionally tiny and are only meant to confirm that the binary runs successfully.
 
+
+---
+
+# Minimal Cellector Pipeline Example
+
+This example demonstrates how to run the Cellector pipeline using a downsampled  
+Cell Ranger BAM file containing **10 foreign genotype cells spiked into the dataset**.
+
+---
+
+## Download Example Dataset
+
+Example input files are available here:
+
+https://drive.google.com/drive/folders/16hrmI6pdYHcMjBBr03qad0IIkYQFfJnL
+
+Download the entire folder:
+
+```bash
+pip install gdown
+gdown --folder https://drive.google.com/drive/folders/16hrmI6pdYHcMjBBr03qad0IIkYQFfJnL
+```
+
+This creates:
+
+```
+input/
+├── bam/
+│   ├── possorted_genome_bam.bam
+│   └── possorted_genome_bam.bam.bai
+├── barcodes/
+│   └── barcodes.tsv.gz
+└── known_variants/
+    └── common_variants_grch38.vcf
+```
+
+---
+
+## Download Matching 10x GRCh38 Reference
+
+You must also download the matching 10x Genomics GRCh38 reference:
+
+```bash
+mkdir -p input/ref
+cd input/ref
+wget https://cf.10xgenomics.com/supp/cell-exp/refdata-gex-GRCh38-2024-A.tar.gz
+tar -xvzf refdata-gex-GRCh38-2024-A.tar.gz
+cd ../..
+```
+
+FASTA used by the pipeline:
+
+```
+input/ref/refdata-gex-GRCh38-2024-A/fasta/genome.fa
+```
+
+---
+
+## Run with Singularity (Recommended)
+
+```bash
+singularity exec \
+  --bind $(pwd):/workspace \
+  cellector.sif \
+  cellector_pipeline.py \
+    --bam /workspace/input/bam/possorted_genome_bam.bam \
+    --barcodes /workspace/input/barcodes/barcodes.tsv.gz \
+    --threads 10 \
+    --out_dir /workspace/output/cellector_outs \
+    --common_variants /workspace/input/known_variants/common_variants_grch38.vcf \
+    --fasta /workspace/input/ref/refdata-gex-GRCh38-2024-A/fasta/genome.fa
+```
+
+---
+
+## Run Manually (Without Container)
+
+```bash
+git clone https://github.com/wheaton5/cellector.git
+```
+
+```bash
+./cellector/cellector_pipeline.py \
+  --bam input/bam/possorted_genome_bam.bam \
+  --barcodes input/barcodes/barcodes.tsv.gz \
+  --threads 10 \
+  --out_dir output/cellector_outs \
+  --common_variants input/known_variants/common_variants_grch38.vcf \
+  --fasta input/ref/refdata-gex-GRCh38-2024-A/fasta/genome.fa
+```
+
+
 ---
 
 ### Running the Minimal Example
