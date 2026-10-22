@@ -350,8 +350,11 @@ else:
     for i in range(1, len(souporcell_values)):
         row = souporcell_values[i]
         final_output_values[i].append(row[0])  # barcode
-        status = row[1]
-        final_output_values[i].append(row[2] if status == "singlet" else status)  # assignment
+        if args.run_troublet:
+            status = row[1]
+            final_output_values[i].append(row[2] if status == "singlet" else status)  # assignment
+        else:
+            final_output_values[i].append(str(row[1]))
 # the rest of the cellector columns    2,3...
 header = cellector_values[0]
 for j in range(2, len(header)):
@@ -362,14 +365,27 @@ for i in range(1, len(cellector_values)):
     for j in range(2, len(row)):
         final_output_values[i].append(row[j])
 # the rest of the souporcell columns   1, 3,4...
-header = souporcell_values[0]
-for j in range(2, len(header)):
-    final_output_values[0].append("souporcell_"+header[j])
+if args.run_troublet:
+    header = souporcell_values[0]
+else:
+    header = ["barcode", "souporcell_assignment", "souporcell_0_log_likelihood", "souporcell_1_log_likelihood"]
+if args.run_troublet:
+    for j in range(2, len(header)):
+        final_output_values[0].append("souporcell_"+header[j])
+else:
+    for j in range(1, len(header)):
+        final_output_values[0].append("souporcell_"+header[j])
+
 for i in range(1, len(souporcell_values)):
     row = souporcell_values[i]
-    final_output_values[i].append(row[1])
-    for j in range(3, len(row)):
-        final_output_values[i].append(row[j])
+    if args.run_troublet:
+        final_output_values[i].append(row[1]) # row[1] in troublet is singlet/doublet status
+        for j in range(3, len(row)):
+            final_output_values[i].append(row[j])
+    else: 
+        final_output_values[i].append("singlet")
+        for j in range(2, len(row)):
+            final_output_values[i].append(row[j])
 
 with open(args.out_dir+"final_output.out", 'w') as final_output_fid:
     for row in range(len(final_output_values)):
