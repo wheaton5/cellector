@@ -368,7 +368,7 @@ for i in range(1, len(cellector_values)):
 if args.run_troublet:
     header = souporcell_values[0]
 else:
-    header = ["barcode", "souporcell_assignment", "souporcell_0_log_likelihood", "souporcell_1_log_likelihood"]
+    header = ["barcode", "assignment", "0_log_likelihood", "1_log_likelihood"]
 if args.run_troublet:
     for j in range(2, len(header)):
         final_output_values[0].append("souporcell_"+header[j])
