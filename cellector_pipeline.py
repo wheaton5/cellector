@@ -252,17 +252,21 @@ if args.run_troublet :
 with open(args.out_dir+"/cellector_assignments.tsv", "r") as cellector_assign_fid:
     cellector_log_likelihood_0 = []
     cellector_log_likelihood_1 = []
+    # new thing log_likelihood_differences = []
     cellector_assign_fid.readline()
     for line in cellector_assign_fid.readlines():
         tokens = line.split("\t")
         majority_likelihood = float(tokens[6])
         minority_likelihood = float(tokens[7])
+        # new thing log_likelihood_difference.append(abs(majority_likelihood - minority_likelihood))
+        
         val = majority_likelihood / np.mean([majority_likelihood, minority_likelihood])
         if tokens[1] == "0":
             cellector_log_likelihood_0.append(val)
         elif tokens[1] == "1":
             cellector_log_likelihood_1.append(val)
     cellector_value = abs(np.mean(cellector_log_likelihood_0) - np.mean(cellector_log_likelihood_1))
+    # new value would be cellector_value = np.mean(log_likelihood_differences) (2 other places this needs to be done below)
 
 
 if args.run_troublet:
